@@ -16,6 +16,7 @@ struct SleepView: View {
     @State private var detail: (session: CachedSleepSession, daily: DailyMetric?)?
     @State private var weekNights: [CachedSleepSession] = []
     @State private var showingAlarm = false
+    @State private var showingEdit = false
 
     // Alarm state read from UserDefaults for the summary card.
     @AppStorage(AlarmKeys.enabled)    private var alarmEnabled   = false
@@ -89,7 +90,28 @@ struct SleepView: View {
             VStack(alignment: .leading, spacing: WH.Spacing.lg) {
 
                 // Custom tight header (replaces the hidden system large-title nav bar)
-                ScreenHeader("Sleep")
+                ScreenHeader("Sleep") {
+                    if detail?.session != nil {
+                        Button {
+                            showingEdit = true
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "pencil")
+                                    .font(.system(size: 12, weight: .medium))
+                                Text("Edit")
+                                    .font(WH.Font.caption)
+                            }
+                            .foregroundStyle(WH.Color.strainBlue)
+                        }
+                    }
+                }
+                .sheet(isPresented: $showingEdit) {
+                    if let session = detail?.session {
+                        SleepEditView(session: session, deviceId: AppConfig.deviceId) {
+                            await loadData()
+                        }
+                    }
+                }
 
                 // 1. Headline — efficiency hero + total duration
                 headlineSection

@@ -81,16 +81,18 @@ extension WhoopStore {
             for s in sessions {
                 try db.execute(sql: """
                     INSERT INTO sleepSession
-                        (deviceId, startTs, endTs, efficiency, restingHr, avgHrv, stagesJSON)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                        (deviceId, startTs, endTs, efficiency, restingHr, avgHrv, stagesJSON, isManualOverride)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(deviceId, startTs) DO UPDATE SET
                         endTs = excluded.endTs,
                         efficiency = excluded.efficiency,
                         restingHr = excluded.restingHr,
                         avgHrv = excluded.avgHrv,
-                        stagesJSON = excluded.stagesJSON
+                        stagesJSON = excluded.stagesJSON,
+                        isManualOverride = excluded.isManualOverride
                     """, arguments: [deviceId, s.startTs, s.endTs, s.efficiency,
-                                     s.restingHr, s.avgHrv, s.stagesJSON])
+                                     s.restingHr, s.avgHrv, s.stagesJSON,
+                                     s.isManualOverride ? 1 : 0])
                 n += db.changesCount
             }
             return n
@@ -170,15 +172,35 @@ extension WhoopStore {
     public func latestSleepSession(deviceId: String) async throws -> CachedSleepSession? {
         try syncRead { db in
             try Row.fetchOne(db, sql: """
-                SELECT startTs, endTs, efficiency, restingHr, avgHrv, stagesJSON FROM sleepSession
+                SELECT startTs, endTs, efficiency, restingHr, avgHrv, stagesJSON, isManualOverride FROM sleepSession
                 WHERE deviceId = ?
                 ORDER BY startTs DESC LIMIT 1
                 """, arguments: [deviceId])
                 .map {
                     CachedSleepSession(startTs: $0["startTs"], endTs: $0["endTs"],
                                        efficiency: $0["efficiency"], restingHr: $0["restingHr"],
-                                       avgHrv: $0["avgHrv"], stagesJSON: $0["stagesJSON"])
+                                       avgHrv: $0["avgHrv"], stagesJSON: $0["stagesJSON"],
+                                       isManualOverride: ($0["isManualOverride"] as Int? ?? 0) != 0)
                 }
+        }
+    }
+
+    /// Delete a specific sleep session by its natural key (deviceId, startTs).
+    public func deleteSleepSession(deviceId: String, startTs: Int) async throws {
+        try syncWrite { db in
+            try db.execute(sql: "DELETE FROM sleepSession WHERE deviceId = ? AND startTs = ?",
+                           arguments: [deviceId, startTs])
+        }
+    }
+
+    /// Returns true if any sleep session in [from, to] was manually set by the user.
+    public func hasManualSleepOverride(deviceId: String, from: Int, to: Int) async throws -> Bool {
+        try syncRead { db in
+            let count = try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM sleepSession
+                WHERE deviceId = ? AND startTs >= ? AND startTs <= ? AND isManualOverride = 1
+                """, arguments: [deviceId, from, to]) ?? 0
+            return count > 0
         }
     }
 
@@ -186,14 +208,15 @@ extension WhoopStore {
     public func sleepSessions(deviceId: String, from: Int, to: Int, limit: Int) async throws -> [CachedSleepSession] {
         try syncRead { db in
             try Row.fetchAll(db, sql: """
-                SELECT startTs, endTs, efficiency, restingHr, avgHrv, stagesJSON FROM sleepSession
+                SELECT startTs, endTs, efficiency, restingHr, avgHrv, stagesJSON, isManualOverride FROM sleepSession
                 WHERE deviceId = ? AND startTs >= ? AND startTs <= ?
                 ORDER BY startTs ASC LIMIT ?
                 """, arguments: [deviceId, from, to, limit])
                 .map {
                     CachedSleepSession(startTs: $0["startTs"], endTs: $0["endTs"],
                                        efficiency: $0["efficiency"], restingHr: $0["restingHr"],
-                                       avgHrv: $0["avgHrv"], stagesJSON: $0["stagesJSON"])
+                                       avgHrv: $0["avgHrv"], stagesJSON: $0["stagesJSON"],
+                                       isManualOverride: ($0["isManualOverride"] as Int? ?? 0) != 0)
                 }
         }
     }

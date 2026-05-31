@@ -84,9 +84,24 @@ public actor OnDeviceEngine {
         let hrInput  = hr.map  { (ts: $0.ts, bpm: $0.bpm) }
         let rrInput  = rr.map  { (ts: $0.ts, rrMs: $0.rrMs) }
 
-        let sleepRuns = SleepDetection.detect(gravity: gravityInput, hr: hrInput)
+        // Manual override: find any session the user edited for this day.
+        let overrideSession: CachedSleepSession? = (try? await store.sleepSessions(
+            deviceId: deviceId, from: sleepSearchStart, to: sleepSearchEnd, limit: 10))?
+            .first(where: { $0.isManualOverride })
 
-        guard let sleepRun = sleepRuns.last else {
+        // Determine sleep runs: override window or auto-detected.
+        let rawRuns: [(start: Int, end: Int)]
+        if let s = overrideSession {
+            rawRuns = [(s.startTs, s.endTs)]
+        } else {
+            rawRuns = SleepDetection.detect(gravity: gravityInput, hr: hrInput)
+        }
+
+        // Group runs within 30 min of each other, pick the group with the most sleep time.
+        let groups = groupRuns(rawRuns, maxGapSec: 1800)
+        guard let bestGroup = groups.max(by: {
+            $0.reduce(0) { $0 + $1.end - $1.start } < $1.reduce(0) { $0 + $1.end - $1.start }
+        }) else {
             let dayStart = Int(dayDate.timeIntervalSince1970)
             let dayEnd   = Int(dayDate.addingTimeInterval(86400).timeIntervalSince1970)
             let strainHR = hrInput.filter { $0.ts >= dayStart && $0.ts <= dayEnd }
@@ -101,10 +116,18 @@ public actor OnDeviceEngine {
             return
         }
 
-        let stages = SleepStaging.stage(
-            sleepStart: sleepRun.start, sleepEnd: sleepRun.end,
-            gravity: gravityInput, hr: hrInput, rr: rrInput
-        )
+        let sleepRun = (start: bestGroup.first!.start, end: bestGroup.last!.end)
+
+        // Stages: use pre-computed stages from a manual override (editor already staged
+        // each sub-segment correctly). Otherwise stage each sub-run independently so
+        // a brief wake gap (bathroom trip) doesn't contaminate the adjacent sleep windows.
+        let stages: [StageSegment]
+        if let override = overrideSession, let json = override.stagesJSON,
+           let decoded = decodeStages(json), !decoded.isEmpty {
+            stages = decoded
+        } else {
+            stages = stageRuns(bestGroup, gravity: gravityInput, hr: hrInput, rr: rrInput)
+        }
 
         let resting = RestingHR.compute(hr: hrInput, sleepStart: sleepRun.start, sleepEnd: sleepRun.end)
         let avgHRV  = HRV.nightlyRMSSD(rr: rrInput, sleepStart: sleepRun.start, sleepEnd: sleepRun.end, stages: stages)
@@ -191,7 +214,8 @@ public actor OnDeviceEngine {
             efficiency: session.efficiency,
             restingHr: session.restingHr,
             avgHrv: session.avgHrv,
-            stagesJSON: encodeStages(session.stages)
+            stagesJSON: encodeStages(session.stages),
+            isManualOverride: overrideSession != nil   // preserve the flag
         )
         try? await store.upsertSleepSessions([cachedSession], deviceId: deviceId)
 
@@ -269,5 +293,48 @@ public actor OnDeviceEngine {
     private func encodeStages(_ stages: [StageSegment]) -> String? {
         guard let data = try? JSONEncoder().encode(stages) else { return nil }
         return String(data: data, encoding: .utf8)
+    }
+
+    private func decodeStages(_ json: String) -> [StageSegment]? {
+        guard let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode([StageSegment].self, from: data)
+    }
+
+    // Group sleep runs where consecutive runs are within maxGapSec of each other.
+    private func groupRuns(_ runs: [(start: Int, end: Int)], maxGapSec: Int) -> [[(start: Int, end: Int)]] {
+        guard !runs.isEmpty else { return [] }
+        let sorted = runs.sorted { $0.start < $1.start }
+        var groups: [[(start: Int, end: Int)]] = [[sorted[0]]]
+        for i in 1..<sorted.count {
+            if sorted[i].start - sorted[i-1].end <= maxGapSec {
+                groups[groups.count - 1].append(sorted[i])
+            } else {
+                groups.append([sorted[i]])
+            }
+        }
+        return groups
+    }
+
+    // Stage each run independently and insert "wake" segments for the gaps between them.
+    // This prevents a brief bathroom-trip wake from contaminating staging of adjacent sleep.
+    private func stageRuns(_ runs: [(start: Int, end: Int)],
+                            gravity: [SleepDetection.GravitySample],
+                            hr: [(ts: Int, bpm: Int)],
+                            rr: [(ts: Int, rrMs: Int)]) -> [StageSegment] {
+        let sorted = runs.sorted { $0.start < $1.start }
+        var all: [StageSegment] = []
+        for i in 0..<sorted.count {
+            let run = sorted[i]
+            let sub = SleepStaging.stage(sleepStart: run.start, sleepEnd: run.end,
+                                         gravity: gravity, hr: hr, rr: rr)
+            all.append(contentsOf: sub)
+            if i < sorted.count - 1 {
+                let gapEnd = sorted[i + 1].start
+                if gapEnd > run.end {
+                    all.append(StageSegment(start: run.end, end: gapEnd, stage: "wake"))
+                }
+            }
+        }
+        return all
     }
 }
