@@ -5,6 +5,7 @@ import BackgroundTasks
 struct OpenWhoopApp: App {
     init() {
         MorningComputeTask.register()
+        BGRefreshTask.register()
     }
     var body: some Scene {
         WindowGroup {
@@ -35,6 +36,7 @@ private struct AppRoot: View {
                 await HealthKitSync.shared.requestAuthorization()
                 RecoveryNotifier.requestAuthorization()
                 MorningComputeTask.schedule()
+                BGRefreshTask.schedule()
                 // Always run the engine on launch so new BLE data is immediately processed.
                 // Tab switches only call load() — engine only runs here and via the manual button.
                 await metrics.refresh()

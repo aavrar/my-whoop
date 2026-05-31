@@ -63,6 +63,9 @@ public enum SleepStaging {
         hr: [(ts: Int, bpm: Int)],
         rr: [(ts: Int, rrMs: Int)]
     ) -> [Epoch] {
+        let sessionHrTimes  = hr.map { Double($0.ts) }
+        let sessionHrValues = hr.map { Double($0.bpm) }
+
         var epochs: [Epoch] = []
         var t = start
         while t < end {
@@ -74,7 +77,7 @@ public enum SleepStaging {
             let gravEpoch = gravity.filter { $0.ts >= t && $0.ts < epochEnd }
             let moveFrac: Double
             if gravEpoch.isEmpty {
-                moveFrac = 0
+                moveFrac = 1.0
             } else {
                 let startIdx = gravity.firstIndex { $0.ts >= t } ?? 0
                 let endIdx   = gravity.lastIndex  { $0.ts < epochEnd } ?? (gravity.count - 1)
@@ -85,15 +88,32 @@ public enum SleepStaging {
 
             let hrWin = hr.filter { $0.ts >= winStart && $0.ts <= winEnd }.map { Double($0.bpm) }
             let meanHR: Double? = hrWin.isEmpty ? nil : hrWin.reduce(0,+) / Double(hrWin.count)
-            let hrStd: Double? = hrWin.count >= 2 ? stddev(hrWin) : nil
+
+            let epochMidTs = Double(t + epochEnd) / 2.0
+            let hrDoG: Double? = dogFilter(times: sessionHrTimes, values: sessionHrValues, center: epochMidTs)
 
             let rrWin = rr.filter { $0.ts >= winStart && $0.ts <= winEnd }
             let epochRMSSD = HRV.gapAwareRMSSD(rr: rrWin)
 
-            epochs.append(Epoch(start: t, end: epochEnd, meanHR: meanHR, rmssd: epochRMSSD, moveFrac: moveFrac, hrStd: hrStd))
+            epochs.append(Epoch(start: t, end: epochEnd, meanHR: meanHR, rmssd: epochRMSSD, moveFrac: moveFrac, hrStd: hrDoG))
             t = epochEnd
         }
         return epochs
+    }
+
+    static func dogFilter(times: [Double], values: [Double], center: Double, sigma1: Double = 120.0, sigma2: Double = 600.0) -> Double? {
+        let cutoff = 3.0 * sigma2
+        var s1 = 0.0, w1 = 0.0, s2 = 0.0, w2 = 0.0
+        for (t, v) in zip(times, values) {
+            let dt = t - center
+            guard abs(dt) <= cutoff else { continue }
+            let g1 = exp(-0.5 * (dt / sigma1) * (dt / sigma1))
+            let g2 = exp(-0.5 * (dt / sigma2) * (dt / sigma2))
+            s1 += g1 * v; w1 += g1
+            s2 += g2 * v; w2 += g2
+        }
+        guard w1 > 0, w2 > 0 else { return nil }
+        return abs(s1 / w1 - s2 / w2)
     }
 
     static func epochActivityCounts(epochs: [Epoch], gravity: [SleepDetection.GravitySample], deltas: [Double]) -> [Double] {
@@ -154,15 +174,16 @@ public enum SleepStaging {
             let rmssd = epoch.rmssd
             let hrStd = epoch.hrStd
 
-            if moveFrac >= wakeMoveThresh {
+            let hrHigh    = hr.map    { $0 >= hrHighP }    ?? false
+            let hrVarHigh = hrStd.map { $0 >= hrStdHighP } ?? false
+
+            if moveFrac >= wakeMoveThresh && (hr == nil || hrHigh || hrVarHigh) {
                 return "wake"
             }
 
             let isStill = moveFrac <= stillMoveThresh
             let hrLow   = hr.map { $0 <= hrLowP }  ?? false
-            let hrHigh  = hr.map { $0 >= hrHighP } ?? false
             let rmssdHigh = rmssd.map { $0 >= rmssdHighP } ?? false
-            let hrVarHigh = hrStd.map { $0 >= hrStdHighP } ?? false
 
             if isStill && hrLow && rmssdHigh { return "deep" }
             if isStill && !hrHigh && hrVarHigh { return "rem" }

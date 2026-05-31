@@ -49,7 +49,9 @@ public enum Baselines {
         nowTs: Int
     ) -> BaselineState {
         guard value >= cfg.minVal && value <= cfg.maxVal else {
-            return state ?? seed(value: value, cfg: cfg, nowTs: nowTs)
+            if let state { return state }
+            let midpoint = (cfg.minVal + cfg.maxVal) / 2.0
+            return BaselineState(baseline: midpoint, spread: cfg.floorSpread, nValid: 0, lastUpdatedTs: nowTs)
         }
 
         guard let state else {

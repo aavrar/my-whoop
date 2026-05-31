@@ -180,7 +180,7 @@ public actor OnDeviceEngine {
 
         let respSamples = (try? await store.respSamples(deviceId: deviceId, from: sleepRun.start, to: sleepRun.end, limit: Self.streamLimitPerDay)) ?? []
         let respRateBpm: Double? = respSamples.isEmpty ? nil : {
-            let vals = respSamples.map { Double($0.raw) / 10.0 }.filter { $0 > 4 && $0 < 40 }
+            let vals = respSamples.map { (10.0 / 512.0) * Double($0.raw) + 6.0 }.filter { $0 > 4 && $0 < 40 }
             return vals.isEmpty ? nil : vals.reduce(0, +) / Double(vals.count)
         }()
 
@@ -195,7 +195,7 @@ public actor OnDeviceEngine {
                 UserDefaults.standard.set(mean, forKey: baselineKey)
                 return 0.0
             }
-            return mean - baseline
+            return 0.02 * (mean - baseline)
         }()
 
         let cals = Calories.estimate(
@@ -203,7 +203,10 @@ public actor OnDeviceEngine {
             age: profile.age,
             sex: profile.sex,
             weightKg: profile.weightKg,
-            dayStartTs: sleepRun.end,
+            heightCm: profile.heightCm,
+            restingHr: Double(rhrForStrain),
+            hrMax: 208.0 - 0.7 * Double(profile.age),
+            dayStartTs: dayStart,
             dayEndTs: dayEnd
         )
 
@@ -251,6 +254,57 @@ public actor OnDeviceEngine {
                 nValid: b.nValid, lastUpdatedTs: b.lastUpdatedTs
             )
         }
+
+        if result.isEmpty {
+            // Fold history from dailyMetrics cache if available (e.g. from imported physiological_cycles.csv)
+            if let historical = try? await store.dailyMetrics(deviceId: deviceId, from: "1970-01-01", to: "2100-01-01"),
+               !historical.isEmpty {
+                var hrvVals: [(value: Double, ts: Int)] = []
+                var rhrVals: [(value: Double, ts: Int)] = []
+                var respVals: [(value: Double, ts: Int)] = []
+
+                let fmt = DateFormatter()
+                fmt.calendar = Calendar(identifier: .gregorian)
+                fmt.timeZone = TimeZone(identifier: "UTC")
+                fmt.dateFormat = "yyyy-MM-dd"
+
+                for metric in historical {
+                    guard let date = fmt.date(from: metric.day) else { continue }
+                    let ts = Int(date.timeIntervalSince1970)
+
+                    if let hrv = metric.avgHrv {
+                        hrvVals.append((value: hrv, ts: ts))
+                    }
+                    if let rhr = metric.restingHr {
+                        rhrVals.append((value: Double(rhr), ts: ts))
+                    }
+                    if let resp = metric.respRateBpm {
+                        respVals.append((value: resp, ts: ts))
+                    }
+                }
+
+                let nowTs = Int(Date().timeIntervalSince1970)
+
+                if !hrvVals.isEmpty, let hrvState = Baselines.fold(values: hrvVals, cfg: defaultConfigs[.hrv]!) {
+                    result[BaselineMetric.hrv.rawValue] = hrvState
+                    let storedB = StoredBaseline(metric: BaselineMetric.hrv.rawValue, baseline: hrvState.baseline, spread: hrvState.spread, nValid: hrvState.nValid, lastUpdatedTs: nowTs)
+                    try? await store.upsertBaseline(storedB, deviceId: deviceId)
+                }
+
+                if !rhrVals.isEmpty, let rhrState = Baselines.fold(values: rhrVals, cfg: defaultConfigs[.restingHr]!) {
+                    result[BaselineMetric.restingHr.rawValue] = rhrState
+                    let storedB = StoredBaseline(metric: BaselineMetric.restingHr.rawValue, baseline: rhrState.baseline, spread: rhrState.spread, nValid: rhrState.nValid, lastUpdatedTs: nowTs)
+                    try? await store.upsertBaseline(storedB, deviceId: deviceId)
+                }
+
+                if !respVals.isEmpty, let respState = Baselines.fold(values: respVals, cfg: defaultConfigs[.resp]!) {
+                    result[BaselineMetric.resp.rawValue] = respState
+                    let storedB = StoredBaseline(metric: BaselineMetric.resp.rawValue, baseline: respState.baseline, spread: respState.spread, nValid: respState.nValid, lastUpdatedTs: nowTs)
+                    try? await store.upsertBaseline(storedB, deviceId: deviceId)
+                }
+            }
+        }
+
         return result
     }
 

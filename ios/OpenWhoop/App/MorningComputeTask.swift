@@ -1,6 +1,5 @@
 import Foundation
 import BackgroundTasks
-import WhoopCompute
 import WhoopStore
 
 enum MorningComputeTask {
@@ -31,24 +30,13 @@ enum MorningComputeTask {
         schedule()
 
         let taskOp = Task {
-            guard let path = try? StorePaths.defaultDatabasePath(),
-                  let store = try? await WhoopStore(path: path) else {
+            guard await BackgroundCompute.run(days: 14, force: true) else {
                 task.setTaskCompleted(success: false)
                 return
             }
-            let deviceId = AppConfig.deviceId
-            let engine = OnDeviceEngine(store: store, deviceId: deviceId)
-            if let data = UserDefaults.standard.data(forKey: "com.openwhoop.profile.v1"),
-               let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                var engineProfile = EngineProfile()
-                if let age = raw["age"] as? Int { engineProfile.age = age }
-                if let sex = raw["sex"] as? String { engineProfile.sex = sex }
-                if let w = raw["weight_kg"] as? Double { engineProfile.weightKg = w }
-                if let h = raw["height_cm"] as? Double { engineProfile.heightCm = h }
-                await engine.setProfile(engineProfile)
-            }
-            await engine.computeRecent(days: 14, force: true)
-            if let metric = try? await store.latestDailyMetric(deviceId: deviceId),
+            if let path = try? StorePaths.defaultDatabasePath(),
+               let store = try? await WhoopStore(path: path),
+               let metric = try? await store.latestDailyMetric(deviceId: AppConfig.deviceId),
                let recovery = metric.recovery {
                 RecoveryNotifier.notify(recovery: recovery, forDay: metric.day)
             }

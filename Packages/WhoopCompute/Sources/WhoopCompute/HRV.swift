@@ -9,9 +9,9 @@ public enum HRV {
     static let gapThresholdS: Double = 3.0
 
     public static func rmssd(_ rrMs: [Int]) -> Double? {
-        let cleaned = cleanRR(rrMs.map { Double($0) })
-        guard cleaned.count >= 2 else { return nil }
-        return poolRMSSD([cleaned])
+        let runs = cleanRROntoRuns(rrMs.map { Double($0) })
+        guard !runs.isEmpty else { return nil }
+        return poolRMSSD(runs)
     }
 
     public static func nightlyRMSSD(
@@ -26,24 +26,35 @@ public enum HRV {
         let deepEpisodes = (stages ?? []).filter { $0.stage == "deep" }
             .sorted { $0.start < $1.start }
 
+        // Primary Tier: Last deep sleep episode (SWS) >= 5 min
         if let last = deepEpisodes.last,
            Double(last.end - last.start) >= swsMinDurationS {
             let window = sorted.filter { $0.ts >= last.start && $0.ts <= last.end }
             if let result = gapAwareRMSSD(rr: window), !result.isNaN { return result }
         }
 
+        // Secondary Tier: Recency-weighted mean RMSSD over all deep sleep episodes
         let allDeep = deepEpisodes
         if !allDeep.isEmpty {
-            var sqDiffs: [Double] = []
-            for ep in allDeep {
+            var epRMSSDs: [Double] = []
+            var epWeights: [Double] = []
+            
+            for (idx, ep) in allDeep.enumerated() {
                 let window = sorted.filter { $0.ts >= ep.start && $0.ts <= ep.end }
-                sqDiffs.append(contentsOf: withinSegmentSqDiffs(rr: window))
+                if let rmssd = gapAwareRMSSD(rr: window), !rmssd.isNaN {
+                    epRMSSDs.append(rmssd)
+                    epWeights.append(Double(idx + 1)) // Chronological recency weights: 1, 2, 3...
+                }
             }
-            if !sqDiffs.isEmpty {
-                return sqrt(sqDiffs.reduce(0, +) / Double(sqDiffs.count))
+            
+            if !epRMSSDs.isEmpty {
+                let sumWeighted = zip(epRMSSDs, epWeights).map { $0 * $1 }.reduce(0, +)
+                let totalWeight = epWeights.reduce(0, +)
+                return sumWeighted / totalWeight
             }
         }
 
+        // Fallback Tier: Whole sleep session
         let window = sorted.filter { $0.ts >= sleepStart && $0.ts <= sleepEnd }
         return gapAwareRMSSD(rr: window)
     }
@@ -58,6 +69,7 @@ public enum HRV {
         guard rr.count >= 2 else { return [] }
         let sorted = rr.sorted { $0.ts < $1.ts }
 
+        // Group into segments split by gaps larger than gapThresholdS
         var segments: [[(ts: Int, rrMs: Int)]] = []
         var current: [(ts: Int, rrMs: Int)] = [sorted[0]]
         for i in 1..<sorted.count {
@@ -71,42 +83,89 @@ public enum HRV {
 
         var sqDiffs: [Double] = []
         for seg in segments {
-            let vals = cleanRR(seg.map { Double($0.rrMs) })
-            guard vals.count >= 2 else { continue }
-            let diffs = zip(vals, vals.dropFirst()).map { ($1 - $0) * ($1 - $0) }
-            sqDiffs.append(contentsOf: diffs)
+            // Split segment into clean runs on dropped Malik outliers, preventing fake successive diffs
+            let runs = cleanRROntoRuns(seg.map { Double($0.rrMs) })
+            for run in runs {
+                let diffs = zip(run, run.dropFirst()).map { ($1 - $0) * ($1 - $0) }
+                sqDiffs.append(contentsOf: diffs)
+            }
         }
         return sqDiffs
     }
 
-    static func cleanRR(_ rr: [Double]) -> [Double] {
-        let filtered = rr.filter { $0 >= rrMinMs && $0 <= rrMaxMs }
-        guard filtered.count >= 3 else { return filtered }
-        return malikFilter(filtered)
-    }
-
-    static func malikFilter(_ rr: [Double]) -> [Double] {
-        var result: [Double] = []
-        for i in 0..<rr.count {
-            let lo = max(0, i - 2)
-            let hi = min(rr.count - 1, i + 2)
-            var window = Array(rr[lo...hi])
-            let selfIdx = i - lo
-            window.remove(at: selfIdx)
-            guard !window.isEmpty else { result.append(rr[i]); continue }
-            let mean = window.reduce(0, +) / Double(window.count)
-            guard mean > 0 else { result.append(rr[i]); continue }
-            if abs(rr[i] - mean) / mean <= malikThreshold {
-                result.append(rr[i])
+    static func cleanRROntoRuns(_ rr: [Double]) -> [[Double]] {
+        let n = rr.count
+        guard n > 0 else { return [] }
+        
+        var isValid = Array(repeating: true, count: n)
+        
+        // 1. Range filter
+        for i in 0..<n {
+            if rr[i] < rrMinMs || rr[i] > rrMaxMs {
+                isValid[i] = false
             }
         }
-        return result
+        
+        // 2. Malik filter (excluding outlier beats, but sliding local mean correctly)
+        for i in 0..<n {
+            guard isValid[i] else { continue }
+            
+            var neighbors: [Double] = []
+            
+            // Backward neighbors (up to 2 valid)
+            var count = 0
+            var j = i - 1
+            while j >= 0 && count < 2 {
+                if isValid[j] {
+                    neighbors.append(rr[j])
+                    count += 1
+                }
+                j -= 1
+            }
+            
+            // Forward neighbors (up to 2 valid)
+            count = 0
+            j = i + 1
+            while j < n && count < 2 {
+                if isValid[j] {
+                    neighbors.append(rr[j])
+                    count += 1
+                }
+                j += 1
+            }
+            
+            if !neighbors.isEmpty {
+                let mean = neighbors.reduce(0, +) / Double(neighbors.count)
+                if mean > 0 && abs(rr[i] - mean) / mean > malikThreshold {
+                    isValid[i] = false
+                }
+            }
+        }
+        
+        // 3. Segment into contiguous valid runs (minimum run size = 2)
+        var runs: [[Double]] = []
+        var currentRun: [Double] = []
+        for i in 0..<n {
+            if isValid[i] {
+                currentRun.append(rr[i])
+            } else {
+                if currentRun.count >= 2 {
+                    runs.append(currentRun)
+                }
+                currentRun = []
+            }
+        }
+        if currentRun.count >= 2 {
+            runs.append(currentRun)
+        }
+        
+        return runs
     }
 
-    private static func poolRMSSD(_ segments: [[Double]]) -> Double? {
+    private static func poolRMSSD(_ runs: [[Double]]) -> Double? {
         var sqDiffs: [Double] = []
-        for seg in segments {
-            let diffs = zip(seg, seg.dropFirst()).map { ($1 - $0) * ($1 - $0) }
+        for run in runs {
+            let diffs = zip(run, run.dropFirst()).map { ($1 - $0) * ($1 - $0) }
             sqDiffs.append(contentsOf: diffs)
         }
         guard !sqDiffs.isEmpty else { return nil }
