@@ -107,7 +107,10 @@ struct SleepView: View {
                 // 4. In-sleep signals
                 inSleepSignalsSection
 
-                // 5. 7-night sleep/wake chart
+                // 5. Sleep need + debt
+                sleepNeedSection
+
+                // 6. 7-night sleep/wake chart
                 sevenNightSection
 
                 // 6. Smart alarm entry card
@@ -356,7 +359,62 @@ struct SleepView: View {
         }
     }
 
-    // MARK: - 5. 7-night sleep/wake chart
+    // MARK: - 5. Sleep need + debt
+
+    private var sleepNeedSection: some View {
+        let daily = detail?.daily
+        let needMin = daily?.sleepNeedMin
+
+        let debtMin: Double? = {
+            guard let need = needMin, let actual = daily?.totalSleepMin else { return nil }
+            return need - actual
+        }()
+
+        return VStack(alignment: .leading, spacing: WH.Spacing.sm) {
+            sectionHeader("Sleep Need")
+
+            HStack(spacing: WH.Spacing.sm) {
+                VStack(alignment: .leading, spacing: WH.Spacing.xs) {
+                    Text("TONIGHT")
+                        .font(WH.Font.cardTitle)
+                        .foregroundStyle(WH.Color.textSecondary)
+                        .tracking(1.0)
+                    Text(needMin.map { formatMinutes($0) } ?? "—")
+                        .font(WH.Font.metricMedium(size: 22))
+                        .foregroundStyle(needMin != nil ? WH.Color.sleepPurple : WH.Color.textSecondary)
+                        .monospacedDigit()
+                }
+                .padding(WH.Spacing.md)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(WH.Color.surface,
+                            in: RoundedRectangle(cornerRadius: WH.Radius.card, style: .continuous))
+
+                VStack(alignment: .leading, spacing: WH.Spacing.xs) {
+                    Text("SLEEP DEBT")
+                        .font(WH.Font.cardTitle)
+                        .foregroundStyle(WH.Color.textSecondary)
+                        .tracking(1.0)
+                    if let debt = debtMin {
+                        Text(debt > 0 ? "-\(formatMinutes(debt))" : "+\(formatMinutes(-debt))")
+                            .font(WH.Font.metricMedium(size: 22))
+                            .foregroundStyle(debt > 0 ? WH.Color.recoveryRed : WH.Color.recoveryGreen)
+                            .monospacedDigit()
+                    } else {
+                        Text("—")
+                            .font(WH.Font.metricMedium(size: 22))
+                            .foregroundStyle(WH.Color.textSecondary)
+                            .monospacedDigit()
+                    }
+                }
+                .padding(WH.Spacing.md)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(WH.Color.surface,
+                            in: RoundedRectangle(cornerRadius: WH.Radius.card, style: .continuous))
+            }
+        }
+    }
+
+    // MARK: - 6. 7-night sleep/wake chart
 
     private var sevenNightSection: some View {
         VStack(alignment: .leading, spacing: WH.Spacing.sm) {
@@ -377,7 +435,7 @@ struct SleepView: View {
         }
     }
 
-    // MARK: - 6. Smart alarm card
+    // MARK: - 7. Smart alarm card
 
     /// Tappable alarm entry card. Shows the armed wake time (or "No alarm set") and
     /// opens AlarmView on tap. Lives on the Sleep tab — WHOOP-style: you set your wake

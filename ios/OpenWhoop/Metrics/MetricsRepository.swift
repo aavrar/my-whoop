@@ -144,6 +144,15 @@ final class MetricsRepository: ObservableObject {
             await serverSync.pullDerived()
         } else if let store {
             let engine = OnDeviceEngine(store: store, deviceId: deviceId)
+            if let data = UserDefaults.standard.data(forKey: "com.openwhoop.profile.v1"),
+               let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                var engineProfile = EngineProfile()
+                if let age = raw["age"] as? Int { engineProfile.age = age }
+                if let sex = raw["sex"] as? String { engineProfile.sex = sex }
+                if let w = raw["weight_kg"] as? Double { engineProfile.weightKg = w }
+                if let h = raw["height_cm"] as? Double { engineProfile.heightCm = h }
+                await engine.setProfile(engineProfile)
+            }
             await engine.computeRecent(days: 14, force: true)
         }
         await load()
@@ -152,9 +161,23 @@ final class MetricsRepository: ObservableObject {
         isRefreshing = false
         lastRefreshedAt = Date()
 
-        // Morning recovery notification: fire once per calendar day when recovery is available.
+        MorningComputeTask.schedule()
+
         if let metric = today, let recovery = metric.recovery {
             RecoveryNotifier.notify(recovery: recovery, forDay: metric.day)
+        }
+
+        if let store {
+            let cal = Calendar(identifier: .gregorian)
+            let fmt = DateFormatter()
+            fmt.calendar = cal
+            fmt.timeZone = TimeZone(identifier: "UTC")
+            fmt.dateFormat = "yyyy-MM-dd"
+            let ref = dataReferenceDate
+            let fromDay = fmt.string(from: cal.date(byAdding: .day, value: -7, to: ref) ?? ref)
+            let toDay = fmt.string(from: ref)
+            let weekMetrics = (try? await store.dailyMetrics(deviceId: deviceId, from: fromDay, to: toDay)) ?? []
+            WeeklyDigestNotifier.schedule(metrics: weekMetrics)
         }
     }
 

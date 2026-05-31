@@ -162,6 +162,21 @@ extension WhoopStore {
                 t.primaryKey(["deviceId", "metric"])
             }
         }
+        migrator.registerMigration("v10") { db in
+            let cols = try db.columns(in: "sleepSession").map { $0.name }
+            if !cols.contains("isManualOverride") {
+                try db.execute(sql: "ALTER TABLE sleepSession ADD COLUMN isManualOverride INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+        migrator.registerMigration("v9") { db in
+            let existing = try db.columns(in: "dailyMetric").map { $0.name }
+            if !existing.contains("calories") {
+                try db.execute(sql: "ALTER TABLE dailyMetric ADD COLUMN calories DOUBLE")
+            }
+            if !existing.contains("sleepNeedMin") {
+                try db.execute(sql: "ALTER TABLE dailyMetric ADD COLUMN sleepNeedMin DOUBLE")
+            }
+        }
         return migrator
     }
 }

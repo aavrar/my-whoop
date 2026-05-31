@@ -51,13 +51,13 @@ struct MetricDetailView: View {
         guard !all.isEmpty else { return [] }
 
         let cal = Calendar(identifier: .gregorian)
-        let ref = all.last?.date ?? metrics.dataReferenceDate
+        let today = Date()
         let halfPeriod = selectedRange.rawValue / 2
 
         guard let windowEnd = cal.date(
             byAdding: .day,
             value: -(pageOffset * halfPeriod),
-            to: ref
+            to: today
         ) else { return all }
 
         guard let windowStart = cal.date(
@@ -71,9 +71,9 @@ struct MetricDetailView: View {
 
     private var xScaleDomain: ClosedRange<Date> {
         let cal = Calendar(identifier: .gregorian)
-        let ref = allPoints.last?.date ?? metrics.dataReferenceDate
+        let today = Date()
         let halfPeriod = selectedRange.rawValue / 2
-        let end   = cal.date(byAdding: .day, value: -(pageOffset * halfPeriod), to: ref) ?? ref
+        let end   = cal.date(byAdding: .day, value: -(pageOffset * halfPeriod), to: today) ?? today
         let start = cal.date(byAdding: .day, value: -(selectedRange.rawValue - 1), to: end) ?? end
         return start...end
     }
@@ -280,13 +280,14 @@ struct MetricDetailView: View {
 
     private func loadAll() async {
         let fmt = isoFormatter()
-        let ref = metrics.dataReferenceDate
+        let today = Date()
         let cal = Calendar(identifier: .gregorian)
-        guard let from = cal.date(byAdding: .day, value: -179, to: ref) else {
+        // 730 days back covers both Dec 2024 history and current May 2026 data
+        guard let from = cal.date(byAdding: .day, value: -730, to: today) else {
             isLoading = false; return
         }
         let fromDay = fmt.string(from: from)
-        let toDay   = fmt.string(from: ref)
+        let toDay   = fmt.string(from: today)
         allRows = await metrics.daily(fromDay: fromDay, toDay: toDay)
         isLoading = false
     }

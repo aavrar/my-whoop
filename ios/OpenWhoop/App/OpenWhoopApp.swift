@@ -1,7 +1,11 @@
 import SwiftUI
+import BackgroundTasks
 
 @main
 struct OpenWhoopApp: App {
+    init() {
+        MorningComputeTask.register()
+    }
     var body: some Scene {
         WindowGroup {
             AppRoot()
@@ -29,7 +33,11 @@ private struct AppRoot: View {
             .environmentObject(live)
             .task {
                 await HealthKitSync.shared.requestAuthorization()
-                await metrics.load()
+                RecoveryNotifier.requestAuthorization()
+                MorningComputeTask.schedule()
+                // Always run the engine on launch so new BLE data is immediately processed.
+                // Tab switches only call load() — engine only runs here and via the manual button.
+                await metrics.refresh()
             }
     }
 }

@@ -51,7 +51,11 @@ struct TodayView: View {
             VStack(alignment: .leading, spacing: WH.Spacing.lg) {
 
                 // Custom tight header (replaces the hidden system large-title nav bar)
-                ScreenHeader("Today")
+                ScreenHeader("Today") {
+                    Text(currentDateLabel())
+                        .font(WH.Font.caption)
+                        .foregroundStyle(WH.Color.textSecondary)
+                }
 
                 // Hero recovery ring (tappable → recovery history)
                 heroSection
@@ -142,10 +146,19 @@ struct TodayView: View {
             return String(format: "%.1f", s)
         }()
         let hasStrain = metrics.today?.strain != nil
-        return MetricCard(title: "Day Strain",
-                          value: value,
-                          unit: hasStrain ? "/ 21" : nil,
-                          accentColor: hasStrain ? WH.Color.strainBlue : WH.Color.textSecondary)
+        return VStack(alignment: .leading, spacing: WH.Spacing.xs) {
+            MetricCard(title: "Day Strain",
+                       value: value,
+                       unit: hasStrain ? "/ 21" : nil,
+                       accentColor: hasStrain ? WH.Color.strainBlue : WH.Color.textSecondary)
+            if let cal = metrics.today?.calories {
+                Text("\(Int(cal)) cal")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(WH.Color.textSecondary)
+                    .padding(.horizontal, WH.Spacing.md)
+                    .padding(.bottom, WH.Spacing.xs)
+            }
+        }
     }
 
     // MARK: - Sleep card
@@ -383,6 +396,12 @@ struct TodayView: View {
         if hours > 0 && mins > 0 { return "\(hours)h \(mins)m" }
         if hours > 0              { return "\(hours)h" }
         return "\(mins)m"
+    }
+
+    private func currentDateLabel() -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "MM/dd/yy"
+        return fmt.string(from: Date())
     }
 
     private func relativeTime(from date: Date) -> String {

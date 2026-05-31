@@ -1,4 +1,5 @@
 import SwiftUI
+import WhoopStore
 
 // MARK: - Profile model
 
@@ -102,6 +103,11 @@ struct SettingsView: View {
     @State private var saveStatus: SaveStatus = .idle
     @State private var isBackfilling = false
 
+    // WHOOP history import
+    @State private var showImportPicker = false
+    @State private var importStatus: String? = nil
+    @State private var isImporting = false
+
     private enum SaveStatus: Equatable {
         case idle
         case saving
@@ -133,6 +139,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                importSection
                 unitsSection
                 heightSection
                 weightSection
@@ -455,6 +462,78 @@ struct SettingsView: View {
             if saveStatus == .synced || saveStatus == .savedLocally {
                 saveStatus = .idle
             }
+        }
+    }
+
+    // MARK: - WHOOP History Import
+
+    private var importSection: some View {
+        Section {
+            Button {
+                showImportPicker = true
+            } label: {
+                HStack {
+                    if isImporting {
+                        ProgressView().scaleEffect(0.8)
+                    } else {
+                        Image(systemName: "square.and.arrow.down")
+                    }
+                    Text(isImporting ? "Importing…" : "Import WHOOP History")
+                        .foregroundStyle(WH.Color.strainBlue)
+                }
+            }
+            .disabled(isImporting)
+            .fileImporter(
+                isPresented: $showImportPicker,
+                allowedContentTypes: [.commaSeparatedText],
+                allowsMultipleSelection: false
+            ) { result in
+                guard case .success(let urls) = result, let url = urls.first else { return }
+                isImporting = true
+                importStatus = nil
+                Task {
+                    await runImport(url: url)
+                    isImporting = false
+                }
+            }
+
+            if let status = importStatus {
+                Text(status)
+                    .font(WH.Font.caption)
+                    .foregroundStyle(WH.Color.textSecondary)
+            }
+        } header: {
+            Text("WHOOP HISTORY")
+                .font(WH.Font.cardTitle)
+                .foregroundStyle(WH.Color.textSecondary)
+                .tracking(1.2)
+        } footer: {
+            Text("Import your physiological_cycles.csv from a WHOOP data export to backfill history and calibrate baselines.")
+                .font(WH.Font.caption)
+                .foregroundStyle(WH.Color.textSecondary)
+        }
+    }
+
+    private func runImport(url: URL) async {
+        guard url.startAccessingSecurityScopedResource() else {
+            importStatus = "Permission denied — could not read file."
+            return
+        }
+        defer { url.stopAccessingSecurityScopedResource() }
+
+        guard let path = try? StorePaths.defaultDatabasePath(),
+              let store = try? await WhoopStore(path: path) else {
+            importStatus = "Could not open database."
+            return
+        }
+
+        let importer = WhoopHistoryImporter(store: store, deviceId: AppConfig.deviceId)
+        do {
+            let (imported, skipped) = try await importer.importCycles(from: url)
+            importStatus = "Done — \(imported) cycles imported, \(skipped) skipped."
+            await metrics.load()
+        } catch {
+            importStatus = "Import failed: \(error.localizedDescription)"
         }
     }
 

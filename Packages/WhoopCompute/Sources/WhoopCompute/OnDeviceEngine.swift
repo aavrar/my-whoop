@@ -2,18 +2,31 @@ import Foundation
 import WhoopStore
 import WhoopProtocol
 
+public struct EngineProfile {
+    public var age: Int
+    public var sex: String
+    public var weightKg: Double
+    public var heightCm: Double
+    public init(age: Int = 30, sex: String = "male", weightKg: Double = 70, heightCm: Double = 170) {
+        self.age = age; self.sex = sex; self.weightKg = weightKg; self.heightCm = heightCm
+    }
+}
+
 public actor OnDeviceEngine {
     private let store: WhoopStore
     private let deviceId: String
+    private var profile: EngineProfile = EngineProfile()
 
     static let lookbackDays = 30
     static let streamLimitPerDay = 200_000
-    static let defaultAge = 30
-    static let defaultSex = "male"
 
     public init(store: WhoopStore, deviceId: String) {
         self.store = store
         self.deviceId = deviceId
+    }
+
+    public func setProfile(_ p: EngineProfile) {
+        profile = p
     }
 
     // MARK: - Public entry point
@@ -65,8 +78,6 @@ public actor OnDeviceEngine {
               let rr   = try? await store.rrIntervals(deviceId: deviceId, from: sleepSearchStart, to: sleepSearchEnd, limit: Self.streamLimitPerDay)
         else { return }
 
-        print("[Engine] \(dayStr): grav=\(grav.count) hr=\(hr.count) rr=\(rr.count)")
-
         let gravityInput: [SleepDetection.GravitySample] = grav.map {
             SleepDetection.GravitySample(ts: $0.ts, x: $0.x, y: $0.y, z: $0.z)
         }
@@ -74,16 +85,18 @@ public actor OnDeviceEngine {
         let rrInput  = rr.map  { (ts: $0.ts, rrMs: $0.rrMs) }
 
         let sleepRuns = SleepDetection.detect(gravity: gravityInput, hr: hrInput)
-        print("[Engine] \(dayStr): sleepRuns=\(sleepRuns.count) \(sleepRuns.map { "[\($0.start)-\($0.end)]" })")
 
         guard let sleepRun = sleepRuns.last else {
-            let nowTs = Int(Date().timeIntervalSince1970)
-            let strainHR = hrInput.filter { $0.ts >= Int(dayDate.timeIntervalSince1970) - 86400 && $0.ts < Int(dayDate.timeIntervalSince1970) }
+            let dayStart = Int(dayDate.timeIntervalSince1970)
+            let dayEnd   = Int(dayDate.addingTimeInterval(86400).timeIntervalSince1970)
+            let strainHR = hrInput.filter { $0.ts >= dayStart && $0.ts <= dayEnd }
             let rhr = baselines[BaselineMetric.restingHr.rawValue].map { Int($0.baseline) } ?? 55
-            let strain = Strain.compute(hr: strainHR, restingHr: rhr, age: Self.defaultAge, sex: Self.defaultSex)
+            let strain = Strain.compute(hr: strainHR, restingHr: rhr, age: profile.age, sex: profile.sex)
+            let needMin = SleepNeed.need(strain: strain, recovery: nil)
             let metric = DailyMetric(day: dayStr, totalSleepMin: nil, efficiency: nil, deepMin: nil,
                                      remMin: nil, lightMin: nil, disturbances: nil, restingHr: nil,
-                                     avgHrv: nil, recovery: nil, strain: strain, exerciseCount: nil)
+                                     avgHrv: nil, recovery: nil, strain: strain, exerciseCount: nil,
+                                     sleepNeedMin: needMin)
             try? await store.upsertDailyMetrics([metric], deviceId: deviceId)
             return
         }
@@ -136,11 +149,42 @@ public actor OnDeviceEngine {
             recovery = nil
         }
 
-        let wakingStart = sleepRun.end
-        let wakingEnd   = Int(dayDate.addingTimeInterval(86400).timeIntervalSince1970)
+        let dayStart = Int(dayDate.timeIntervalSince1970)
+        let dayEnd   = Int(dayDate.addingTimeInterval(86400).timeIntervalSince1970)
         let rhrForStrain = resting ?? Int(baselines[BaselineMetric.restingHr.rawValue]?.baseline ?? 55)
-        let strainHR = hrInput.filter { $0.ts >= wakingStart && $0.ts <= wakingEnd }
-        let strain = Strain.compute(hr: strainHR, restingHr: rhrForStrain, age: Self.defaultAge, sex: Self.defaultSex)
+        let strainHR = hrInput.filter { $0.ts >= dayStart && $0.ts <= dayEnd }
+        let strain = Strain.compute(hr: strainHR, restingHr: rhrForStrain, age: profile.age, sex: profile.sex)
+
+        let respSamples = (try? await store.respSamples(deviceId: deviceId, from: sleepRun.start, to: sleepRun.end, limit: Self.streamLimitPerDay)) ?? []
+        let respRateBpm: Double? = respSamples.isEmpty ? nil : {
+            let vals = respSamples.map { Double($0.raw) / 10.0 }.filter { $0 > 4 && $0 < 40 }
+            return vals.isEmpty ? nil : vals.reduce(0, +) / Double(vals.count)
+        }()
+
+        let skinSamples = (try? await store.skinTempSamples(deviceId: deviceId, from: sleepRun.start, to: sleepRun.end, limit: Self.streamLimitPerDay)) ?? []
+        let skinTempDevC: Double? = skinSamples.isEmpty ? nil : {
+            let vals = skinSamples.map { Double($0.raw) }.filter { $0 > 0 }
+            guard !vals.isEmpty else { return nil }
+            let mean = vals.reduce(0, +) / Double(vals.count)
+            let baselineKey = "skinTempBaseline_\(deviceId)"
+            let baseline = UserDefaults.standard.double(forKey: baselineKey)
+            if baseline == 0 {
+                UserDefaults.standard.set(mean, forKey: baselineKey)
+                return 0.0
+            }
+            return mean - baseline
+        }()
+
+        let cals = Calories.estimate(
+            hr: hrInput,
+            age: profile.age,
+            sex: profile.sex,
+            weightKg: profile.weightKg,
+            dayStartTs: sleepRun.end,
+            dayEndTs: dayEnd
+        )
+
+        let needMin = SleepNeed.need(strain: strain, recovery: recovery)
 
         let cachedSession = CachedSleepSession(
             startTs: session.startTs, endTs: session.endTs,
@@ -163,7 +207,11 @@ public actor OnDeviceEngine {
             avgHrv: avgHRV,
             recovery: recovery,
             strain: strain,
-            exerciseCount: nil
+            exerciseCount: nil,
+            skinTempDevC: skinTempDevC,
+            respRateBpm: respRateBpm,
+            calories: cals > 0 ? cals : nil,
+            sleepNeedMin: needMin
         )
         try? await store.upsertDailyMetrics([metric], deviceId: deviceId)
     }

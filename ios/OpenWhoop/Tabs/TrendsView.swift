@@ -78,12 +78,10 @@ struct TrendsView: View {
     /// If no data is returned for 24h, automatically widens to 7 days so real data shows.
     private func reloadHR() async {
         hrIsLoading = true
-        let ref = metrics.dataReferenceEpoch
-        let from24h = ref - 86_400
-        var pts = await metrics.hrSeries(fromEpoch: from24h, toEpoch: ref + 3600, maxPoints: 300)
+        let now = Int(Date().timeIntervalSince1970)
+        var pts = await metrics.hrSeries(fromEpoch: now - 86_400, toEpoch: now, maxPoints: 300)
         if pts.isEmpty {
-            let from7d = ref - 7 * 86_400
-            pts = await metrics.hrSeries(fromEpoch: from7d, toEpoch: ref + 3600, maxPoints: 300)
+            pts = await metrics.hrSeries(fromEpoch: now - 7 * 86_400, toEpoch: now, maxPoints: 300)
         }
         hrPoints = pts
         hrIsLoading = false
@@ -101,9 +99,9 @@ struct TrendsView: View {
         fmt.calendar = cal
         fmt.timeZone = utc
         fmt.dateFormat = "yyyy-MM-dd"
-        let ref  = metrics.dataReferenceDate
-        let from = cal.date(byAdding: .day, value: -(range.rawValue - 1), to: ref) ?? ref
-        return (fmt.string(from: from), fmt.string(from: ref))
+        let today = Date()
+        let from  = cal.date(byAdding: .day, value: -(range.rawValue - 1), to: today) ?? today
+        return (fmt.string(from: from), fmt.string(from: today))
     }
 
     // MARK: - Derived chart data (kind-driven)
