@@ -24,11 +24,13 @@ public struct CachedSleepSession: Equatable, Codable {
     public let restingHr: Int?
     public let avgHrv: Double?
     public let stagesJSON: String?
+    public let isManualOverride: Bool
     public init(startTs: Int, endTs: Int, efficiency: Double?, restingHr: Int?,
-                avgHrv: Double?, stagesJSON: String?) {
+                avgHrv: Double?, stagesJSON: String?, isManualOverride: Bool = false) {
         self.startTs = startTs; self.endTs = endTs
         self.efficiency = efficiency; self.restingHr = restingHr
         self.avgHrv = avgHrv; self.stagesJSON = stagesJSON
+        self.isManualOverride = isManualOverride
     }
 }
 
