@@ -144,6 +144,8 @@ final class MetricsRepository: ObservableObject {
             await engine.computeRecent(days: 7)
         }
         await load()
+        await syncToHealthKit()
+        WidgetDataStore.write(today: today, lastNight: lastNight)
         isRefreshing = false
         lastRefreshedAt = Date()
 
@@ -151,6 +153,13 @@ final class MetricsRepository: ObservableObject {
         if let metric = today, let recovery = metric.recovery {
             RecoveryNotifier.notify(recovery: recovery, forDay: metric.day)
         }
+    }
+
+    // MARK: - HealthKit sync
+
+    private func syncToHealthKit() async {
+        guard let daily = today, let session = lastNight else { return }
+        await HealthKitSync.shared.sync(session: session, daily: daily)
     }
 
     // MARK: - Range reads for Trends/Sleep tabs
