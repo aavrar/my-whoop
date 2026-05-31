@@ -190,6 +190,7 @@ struct RecoverySmallView: View {
 
 // MARK: - Widget entry point
 
+@main
 struct OpenWhoopWidget: Widget {
     let kind = "OpenWhoopWidget"
 
