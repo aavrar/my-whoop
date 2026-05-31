@@ -27,5 +27,9 @@ private struct AppRoot: View {
         RootTabView()
             .environmentObject(metrics)
             .environmentObject(live)
+            .task {
+                await HealthKitSync.shared.requestAuthorization()
+                await metrics.load()
+            }
     }
 }

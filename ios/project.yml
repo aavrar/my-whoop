@@ -29,21 +29,62 @@ targets:
         NSBluetoothAlwaysUsageDescription: >-
           OpenWhoop connects to your WHOOP 4.0 over Bluetooth to read heart rate,
           R-R intervals, battery, and sensor data locally on your device.
+        NSHealthShareUsageDescription: >-
+          OpenWhoop writes your heart rate, HRV, and sleep data to Apple Health.
+        NSHealthUpdateUsageDescription: >-
+          OpenWhoop writes your heart rate, HRV, and sleep data to Apple Health.
         UIBackgroundModes:
           - bluetooth-central
         WHOOP_BASE_URL: $(WHOOP_BASE_URL)
         WHOOP_API_KEY: $(WHOOP_API_KEY)
         WHOOP_DEVICE_ID: $(WHOOP_DEVICE_ID)
+    entitlements:
+      path: OpenWhoop/OpenWhoop.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.access: []
+        com.apple.security.application-groups:
+          - group.com.aahad.openwhoop
     dependencies:
       - package: WhoopProtocol
       - package: WhoopStore
       - package: WhoopCompute
+      - sdk: HealthKit.framework
+      - sdk: WidgetKit.framework
+      - target: OpenWhoopWidget
+        embed: true
     settings:
       base:
         TARGETED_DEVICE_FAMILY: 1
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+
+  OpenWhoopWidget:
+    type: app-extension
+    platform: iOS
+    sources: [OpenWhoopWidget]
+    info:
+      path: OpenWhoopWidget/Info.plist
+      properties:
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: OpenWhoopWidget/OpenWhoopWidget.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.aahad.openwhoop
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+    settings:
+      base:
+        TARGETED_DEVICE_FAMILY: 1
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        PRODUCT_BUNDLE_IDENTIFIER: com.aahad.openwhoop.widget
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+
   OpenWhoopTests:
     type: bundle.unit-test
     platform: iOS

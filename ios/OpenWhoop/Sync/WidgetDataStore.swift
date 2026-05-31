@@ -38,6 +38,7 @@ enum WidgetDataStore {
         if let data = try? JSONEncoder().encode(snapshot) {
             defaults.set(data, forKey: key)
         }
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     static func read() -> WidgetSnapshot? {
