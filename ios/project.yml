@@ -9,6 +9,8 @@ packages:
     path: ../Packages/WhoopProtocol
   WhoopStore:
     path: ../Packages/WhoopStore
+  WhoopCompute:
+    path: ../Packages/WhoopCompute
 targets:
   OpenWhoop:
     type: application
@@ -35,6 +37,7 @@ targets:
     dependencies:
       - package: WhoopProtocol
       - package: WhoopStore
+      - package: WhoopCompute
     settings:
       base:
         TARGETED_DEVICE_FAMILY: 1

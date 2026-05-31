@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import WhoopStore
+import WhoopCompute
 
 // MARK: - MetricsRepository
 //
@@ -130,13 +131,18 @@ final class MetricsRepository: ObservableObject {
     // MARK: - Refresh from server then reload
 
     /// Pull derived metrics from the server (if configured) then reload from cache.
-    /// Uses pullDerived() — NOT the heavy full-stream pull() — to keep the UI refresh fast.
-    /// Safe when serverSync == nil (just reloads). Never throws.
+    /// When no server is configured, runs on-device computation instead.
+    /// Safe when serverSync == nil. Never throws.
     func refresh() async {
         await ensureOpen()
         isRefreshing = true
         lastError = nil
-        await serverSync?.pullDerived()
+        if let serverSync {
+            await serverSync.pullDerived()
+        } else if let store {
+            let engine = OnDeviceEngine(store: store, deviceId: deviceId)
+            await engine.computeRecent(days: 7)
+        }
         await load()
         isRefreshing = false
         lastRefreshedAt = Date()

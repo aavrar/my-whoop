@@ -151,6 +151,17 @@ extension WhoopStore {
                 t.add(column: "respRateBpm", .double)
             }
         }
+        migrator.registerMigration("v8") { db in
+            try db.create(table: "baseline") { t in
+                t.column("deviceId", .text).notNull()
+                t.column("metric", .text).notNull()
+                t.column("baseline", .double).notNull()
+                t.column("spread", .double).notNull()
+                t.column("nValid", .integer).notNull()
+                t.column("lastUpdatedTs", .integer).notNull()
+                t.primaryKey(["deviceId", "metric"])
+            }
+        }
         return migrator
     }
 }
