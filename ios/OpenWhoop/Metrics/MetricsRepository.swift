@@ -98,6 +98,26 @@ final class MetricsRepository: ObservableObject {
         return MetricsRepository(store: store, serverSync: sync, deviceId: deviceId)
     }
 
+    // MARK: - Data reference date (band-clock-aware)
+
+    /// The date of the most recently computed daily metric. When the band's RTC is behind
+    /// wall-clock time this will be in the past (e.g. December 2024). Views should use this
+    /// as their "today" anchor instead of Date() so queries hit the actual data range.
+    var dataReferenceDate: Date {
+        guard let day = today?.day else { return Date() }
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        fmt.timeZone = TimeZone(identifier: "UTC")
+        return fmt.date(from: day) ?? Date()
+    }
+
+    /// Unix epoch of the most recent data point (endTs of last sleep session, or
+    /// dataReferenceDate midnight UTC). Use for epoch-based window calculations.
+    var dataReferenceEpoch: Int {
+        if let ts = lastNight?.endTs { return ts }
+        return Int(dataReferenceDate.timeIntervalSince1970)
+    }
+
     // MARK: - Load from cache (no network)
 
     /// Populate `today`/`lastNight` from the local cache. No network call.
@@ -105,27 +125,10 @@ final class MetricsRepository: ObservableObject {
         await ensureOpen()
         guard let store else { return }
 
-        let now = Date()
-        let cal = Calendar(identifier: .gregorian)
-        let fmt = DateFormatter()
-        fmt.calendar = cal
-        fmt.timeZone = TimeZone(identifier: "UTC")
-        fmt.dateFormat = "yyyy-MM-dd"
-
-        // Fetch last 14 days of daily metrics; take the most-recent (last) row.
-        if let start = cal.date(byAdding: .day, value: -14, to: now) {
-            let fromDay = fmt.string(from: start)
-            let toDay = fmt.string(from: now)
-            today = (try? await store.dailyMetrics(deviceId: deviceId, from: fromDay, to: toDay))?.last
-        }
-
-        // Fetch last 14 days of sleep sessions; take the most-recent (last) row.
-        let windowStart = Int(now.timeIntervalSince1970) - 14 * 86_400
-        let windowEnd   = Int(now.timeIntervalSince1970) + 86_400   // +1 day buffer
-        lastNight = (try? await store.sleepSessions(deviceId: deviceId,
-                                                    from: windowStart,
-                                                    to: windowEnd,
-                                                    limit: 50))?.last
+        // Use the most-recent metric regardless of wall-clock date. This handles the common
+        // case where the band's RTC is behind wall time (e.g. long gap since last official sync).
+        today = try? await store.latestDailyMetric(deviceId: deviceId)
+        lastNight = try? await store.latestSleepSession(deviceId: deviceId)
     }
 
     // MARK: - Refresh from server then reload
@@ -141,7 +144,7 @@ final class MetricsRepository: ObservableObject {
             await serverSync.pullDerived()
         } else if let store {
             let engine = OnDeviceEngine(store: store, deviceId: deviceId)
-            await engine.computeRecent(days: 7)
+            await engine.computeRecent(days: 14, force: true)
         }
         await load()
         await syncToHealthKit()
@@ -204,14 +207,8 @@ final class MetricsRepository: ObservableObject {
         await ensureOpen()
         guard let store else { return nil }
 
-        // Fetch the most-recent session from the last 14 days.
-        let now = Int(Date().timeIntervalSince1970)
-        let windowStart = now - 14 * 86_400
-        let windowEnd   = now + 86_400
-        guard let session = (try? await store.sleepSessions(deviceId: deviceId,
-                                                            from: windowStart,
-                                                            to: windowEnd,
-                                                            limit: 50))?.last else { return nil }
+        // Use the most-recent session regardless of wall-clock date (handles band clock drift).
+        guard let session = (try? await store.latestSleepSession(deviceId: deviceId)) else { return nil }
 
         // Derive the YYYY-MM-DD day that the session's endTs falls on (UTC).
         let fmt = DateFormatter()
@@ -236,14 +233,14 @@ final class MetricsRepository: ObservableObject {
         await ensureOpen()
         guard let store else { return [] }
 
-        let now = Int(Date().timeIntervalSince1970)
-        let windowStart = now - (nights + 2) * 86_400
-        let windowEnd   = now + 86_400
+        // Anchor to the latest known session so we work even when the band clock is behind.
+        guard let latest = try? await store.latestSleepSession(deviceId: deviceId) else { return [] }
+        let windowEnd   = latest.endTs + 86_400
+        let windowStart = windowEnd - (nights + 2) * 86_400
         let sessions = (try? await store.sleepSessions(deviceId: deviceId,
                                                        from: windowStart,
                                                        to: windowEnd,
                                                        limit: nights + 2)) ?? []
-        // sleepSessions returns ASC by startTs; take the last `nights` (most-recent), keep ASC order.
         return Array(sessions.suffix(nights))
     }
 

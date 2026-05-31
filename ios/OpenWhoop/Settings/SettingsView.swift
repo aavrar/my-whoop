@@ -439,9 +439,9 @@ struct SettingsView: View {
             fmt.calendar = cal
             fmt.timeZone = TimeZone(identifier: "UTC")
             fmt.dateFormat = "yyyy-MM-dd"
-            let now = Date()
-            let fromDay = fmt.string(from: cal.date(byAdding: .day, value: -60, to: now) ?? now)
-            let toDay = fmt.string(from: now)
+            let ref     = metrics.dataReferenceDate
+            let fromDay = fmt.string(from: cal.date(byAdding: .day, value: -60, to: ref) ?? ref)
+            let toDay   = fmt.string(from: ref)
             isBackfilling = true
             Task {
                 await metrics.backfillWorkouts(from: fromDay, to: toDay)

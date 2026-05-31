@@ -118,6 +118,17 @@ public func parseFrame(_ frame: [UInt8]) -> ParsedFrame {
         // static fields from schema
         for fld in spec!.fields {
             guard let dtype = fld.dtype else { continue }
+            if dtype == "f32" {
+                guard fld.off + 4 <= frame.count else { continue }
+                let bits = UInt32(frame[fld.off])
+                    | (UInt32(frame[fld.off + 1]) << 8)
+                    | (UInt32(frame[fld.off + 2]) << 16)
+                    | (UInt32(frame[fld.off + 3]) << 24)
+                let f = Float(bitPattern: bits)
+                guard !f.isNaN, !f.isInfinite else { continue }
+                fb.add(fld.off, fld.len, fld.name, fld.cat, value: .double(Double(f)), note: fld.note)
+                continue
+            }
             guard let val = readDType(frame, fld.off, dtype) else { continue }
             let value: ParsedValue
             if let enumKey = fld.`enum` {

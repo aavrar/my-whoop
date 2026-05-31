@@ -51,14 +51,13 @@ struct MetricDetailView: View {
         guard !all.isEmpty else { return [] }
 
         let cal = Calendar(identifier: .gregorian)
-        let today = Date()
+        let ref = all.last?.date ?? metrics.dataReferenceDate
         let halfPeriod = selectedRange.rawValue / 2
 
-        // Window end shifts earlier by (pageOffset * halfPeriod) days
         guard let windowEnd = cal.date(
             byAdding: .day,
             value: -(pageOffset * halfPeriod),
-            to: today
+            to: ref
         ) else { return all }
 
         guard let windowStart = cal.date(
@@ -70,12 +69,11 @@ struct MetricDetailView: View {
         return all.filter { $0.date >= windowStart && $0.date <= windowEnd }
     }
 
-    /// X-scale domain for the current window (ensures chart fills the axis even with sparse data).
     private var xScaleDomain: ClosedRange<Date> {
         let cal = Calendar(identifier: .gregorian)
-        let today = Date()
+        let ref = allPoints.last?.date ?? metrics.dataReferenceDate
         let halfPeriod = selectedRange.rawValue / 2
-        let end   = cal.date(byAdding: .day, value: -(pageOffset * halfPeriod), to: today) ?? today
+        let end   = cal.date(byAdding: .day, value: -(pageOffset * halfPeriod), to: ref) ?? ref
         let start = cal.date(byAdding: .day, value: -(selectedRange.rawValue - 1), to: end) ?? end
         return start...end
     }
@@ -282,13 +280,13 @@ struct MetricDetailView: View {
 
     private func loadAll() async {
         let fmt = isoFormatter()
-        let today = Date()
+        let ref = metrics.dataReferenceDate
         let cal = Calendar(identifier: .gregorian)
-        guard let from = cal.date(byAdding: .day, value: -179, to: today) else {
+        guard let from = cal.date(byAdding: .day, value: -179, to: ref) else {
             isLoading = false; return
         }
         let fromDay = fmt.string(from: from)
-        let toDay   = fmt.string(from: today)
+        let toDay   = fmt.string(from: ref)
         allRows = await metrics.daily(fromDay: fromDay, toDay: toDay)
         isLoading = false
     }

@@ -27,7 +27,7 @@ struct TodayView: View {
             .toolbar(.hidden, for: .navigationBar)
         }
         .preferredColorScheme(.dark)
-        .task { await metrics.refresh() }
+        .task { await metrics.load() }
         .refreshable { await metrics.refresh() }
     }
 
@@ -70,6 +70,8 @@ struct TodayView: View {
 
                 // HRV + RHR cards (half width each)
                 hrvAndRhrRow
+
+                processButton
 
                 if let err = metrics.lastError {
                     errorBanner(err)
@@ -311,6 +313,28 @@ struct TodayView: View {
     }
 
     // MARK: - Sync footer
+
+    private var processButton: some View {
+        Button {
+            Task { await metrics.refresh() }
+        } label: {
+            HStack(spacing: WH.Spacing.sm) {
+                if metrics.isRefreshing {
+                    ProgressView().scaleEffect(0.8).tint(.white)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                }
+                Text(metrics.isRefreshing ? "Processing…" : "Process Sleep Data")
+                    .font(.system(size: 15, weight: .semibold))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(WH.Color.surface)
+            .foregroundStyle(WH.Color.textPrimary)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .disabled(metrics.isRefreshing)
+    }
 
     private var syncFooter: some View {
         HStack {

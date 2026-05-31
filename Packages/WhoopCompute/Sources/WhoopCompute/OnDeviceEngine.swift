@@ -26,7 +26,11 @@ public actor OnDeviceEngine {
         var calUTC = cal
         calUTC.timeZone = tz
 
-        let now = Date()
+        // Use the latest HR timestamp as the reference date so the engine works
+        // even when the band's internal clock is behind wall-clock time (common on first
+        // pair — historical frames carry device-epoch timestamps, not wall-clock).
+        let latestHRTs = (try? await store.latestHRSampleTs(deviceId: deviceId)) ?? Int(Date().timeIntervalSince1970)
+        let now = Date(timeIntervalSince1970: TimeInterval(latestHRTs))
         let fmt = DateFormatter()
         fmt.calendar = calUTC
         fmt.timeZone = tz
@@ -61,6 +65,8 @@ public actor OnDeviceEngine {
               let rr   = try? await store.rrIntervals(deviceId: deviceId, from: sleepSearchStart, to: sleepSearchEnd, limit: Self.streamLimitPerDay)
         else { return }
 
+        print("[Engine] \(dayStr): grav=\(grav.count) hr=\(hr.count) rr=\(rr.count)")
+
         let gravityInput: [SleepDetection.GravitySample] = grav.map {
             SleepDetection.GravitySample(ts: $0.ts, x: $0.x, y: $0.y, z: $0.z)
         }
@@ -68,6 +74,7 @@ public actor OnDeviceEngine {
         let rrInput  = rr.map  { (ts: $0.ts, rrMs: $0.rrMs) }
 
         let sleepRuns = SleepDetection.detect(gravity: gravityInput, hr: hrInput)
+        print("[Engine] \(dayStr): sleepRuns=\(sleepRuns.count) \(sleepRuns.map { "[\($0.start)-\($0.end)]" })")
 
         guard let sleepRun = sleepRuns.last else {
             let nowTs = Int(Date().timeIntervalSince1970)

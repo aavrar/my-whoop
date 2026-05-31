@@ -228,9 +228,9 @@ struct WorkoutsView: View {
         fmt.calendar = cal
         fmt.timeZone = utc
         fmt.dateFormat = "yyyy-MM-dd"
-        let today = Date()
-        let from = cal.date(byAdding: .day, value: -30, to: today) ?? today
-        return (fmt.string(from: from), fmt.string(from: today))
+        let ref  = metrics.dataReferenceDate
+        let from = cal.date(byAdding: .day, value: -30, to: ref) ?? ref
+        return (fmt.string(from: from), fmt.string(from: ref))
     }
 
     // MARK: - Formatting

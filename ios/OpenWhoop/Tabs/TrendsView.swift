@@ -54,7 +54,7 @@ struct TrendsView: View {
         }
         .preferredColorScheme(.dark)
         .task {
-            await metrics.refresh()
+            await metrics.load()
             await reloadRows()
             isLoading = false
             await reloadHR()
@@ -78,14 +78,12 @@ struct TrendsView: View {
     /// If no data is returned for 24h, automatically widens to 7 days so real data shows.
     private func reloadHR() async {
         hrIsLoading = true
-        let now = Int(Date().timeIntervalSince1970)
-        let from24h = now - 86_400
-        var pts = await metrics.hrSeries(fromEpoch: from24h, toEpoch: now, maxPoints: 300)
+        let ref = metrics.dataReferenceEpoch
+        let from24h = ref - 86_400
+        var pts = await metrics.hrSeries(fromEpoch: from24h, toEpoch: ref + 3600, maxPoints: 300)
         if pts.isEmpty {
-            // Widen to 7 days to guarantee something meaningful renders when
-            // the strap hasn't streamed live HR in the last 24 hours.
-            let from7d = now - 7 * 86_400
-            pts = await metrics.hrSeries(fromEpoch: from7d, toEpoch: now, maxPoints: 300)
+            let from7d = ref - 7 * 86_400
+            pts = await metrics.hrSeries(fromEpoch: from7d, toEpoch: ref + 3600, maxPoints: 300)
         }
         hrPoints = pts
         hrIsLoading = false
@@ -103,9 +101,9 @@ struct TrendsView: View {
         fmt.calendar = cal
         fmt.timeZone = utc
         fmt.dateFormat = "yyyy-MM-dd"
-        let today = Date()
-        let from  = cal.date(byAdding: .day, value: -(range.rawValue - 1), to: today) ?? today
-        return (fmt.string(from: from), fmt.string(from: today))
+        let ref  = metrics.dataReferenceDate
+        let from = cal.date(byAdding: .day, value: -(range.rawValue - 1), to: ref) ?? ref
+        return (fmt.string(from: from), fmt.string(from: ref))
     }
 
     // MARK: - Derived chart data (kind-driven)

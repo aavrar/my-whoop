@@ -30,7 +30,7 @@ public enum SleepDetection {
         gravity: [GravitySample],
         hr: [(ts: Int, bpm: Int)]
     ) -> [(start: Int, end: Int)] {
-        guard gravity.count >= 2 else { return [] }
+        guard gravity.count >= 2 else { return detectFromHR(hr: hr) }
         let sorted = gravity.sorted { $0.ts < $1.ts }
 
         let deltas = gravityDeltas(sorted)
@@ -171,5 +171,47 @@ public enum SleepDetection {
         guard seg.count >= hrRefineMinSamples else { return true }
         let mean = Double(seg.map { $0.bpm }.reduce(0, +)) / Double(seg.count)
         return mean <= baseline * hrSleepBaselineMult
+    }
+
+    // Fallback when no gravity data: find the longest low-HR window in the input range.
+    // Uses a permissive threshold (115% of median) and allows up to 30-min gaps so BLE
+    // disconnects during sleep don't fragment the window. Returns at most one window.
+    static func detectFromHR(hr: [(ts: Int, bpm: Int)]) -> [(start: Int, end: Int)] {
+        guard hr.count >= hrRefineMinSamples else { return [] }
+
+        let sorted = hr.sorted { $0.ts < $1.ts }
+        let allBpm = sorted.map { Double($0.bpm) }.sorted()
+        let median = allBpm[allBpm.count / 2]
+        let threshold = median * 1.15   // more permissive than confirmWithHR's 1.05
+
+        // Allow up to 30-min gaps (BLE disconnects during sleep are common).
+        let maxGapSec = 30 * 60
+        var windows: [(start: Int, end: Int)] = []
+        var winStart: Int? = nil
+        var winEnd: Int = 0
+
+        for i in 0..<sorted.count {
+            let s = sorted[i]
+            let gap = i > 0 ? (s.ts - sorted[i-1].ts) : 0
+            let lowHR = Double(s.bpm) <= threshold
+            if lowHR && (winStart == nil || gap <= maxGapSec) {
+                if winStart == nil { winStart = s.ts }
+                winEnd = s.ts
+            } else {
+                if let ws = winStart, (winEnd - ws) >= Int(minSleepS) {
+                    windows.append((ws, winEnd))
+                }
+                winStart = lowHR ? s.ts : nil
+                winEnd = s.ts
+            }
+        }
+        if let ws = winStart, (winEnd - ws) >= Int(minSleepS) {
+            windows.append((ws, winEnd))
+        }
+
+        guard let best = windows.max(by: { ($0.end - $0.start) < ($1.end - $1.start) }) else {
+            return []
+        }
+        return [best]
     }
 }

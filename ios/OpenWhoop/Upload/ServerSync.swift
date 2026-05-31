@@ -314,16 +314,19 @@ final class ServerSync {
     /// Core derived-pull implementation. Pulls `/v1/daily` over a `days`-wide window ending now,
     /// then `/v1/sleep` for each day that has a daily metric row. Shared by incremental + restore.
     private func pullDerivedWindow(days windowDays: Int) async {
-        let now = Date()
         let cal = Calendar(identifier: .gregorian)
         let fmt = DateFormatter()
         fmt.calendar = cal
         fmt.timeZone = TimeZone(identifier: "UTC")
         fmt.dateFormat = "yyyy-MM-dd"
 
-        guard let start = cal.date(byAdding: .day, value: -windowDays, to: now) else { return }
+        // Anchor to the latest HR sample so the window covers actual data even when
+        // the band's RTC is behind wall-clock time.
+        let latestTs = (try? await store.latestHRSampleTs(deviceId: deviceId)) ?? Int(Date().timeIntervalSince1970)
+        let ref = Date(timeIntervalSince1970: TimeInterval(latestTs))
+        guard let start = cal.date(byAdding: .day, value: -windowDays, to: ref) else { return }
         let fromDay = fmt.string(from: start)
-        let toDay = fmt.string(from: now)
+        let toDay = fmt.string(from: ref)
 
         // /v1/daily over the window. This is the authoritative list of days WITH data.
         guard let days = await getDaily(from: fromDay, to: toDay) else { return }

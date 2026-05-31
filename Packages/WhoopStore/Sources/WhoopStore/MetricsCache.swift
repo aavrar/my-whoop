@@ -123,6 +123,45 @@ extension WhoopStore {
 
     // MARK: - Reads
 
+    /// Most recent daily metric for a device, regardless of date. Returns nil if none exist.
+    public func latestDailyMetric(deviceId: String) async throws -> DailyMetric? {
+        try syncRead { db in
+            try Row.fetchOne(db, sql: """
+                SELECT day, totalSleepMin, efficiency, deepMin, remMin, lightMin, disturbances,
+                       restingHr, avgHrv, recovery, strain, exerciseCount,
+                       spo2Pct, skinTempDevC, respRateBpm FROM dailyMetric
+                WHERE deviceId = ?
+                ORDER BY day DESC LIMIT 1
+                """, arguments: [deviceId])
+                .map {
+                    DailyMetric(day: $0["day"], totalSleepMin: $0["totalSleepMin"],
+                                efficiency: $0["efficiency"], deepMin: $0["deepMin"],
+                                remMin: $0["remMin"], lightMin: $0["lightMin"],
+                                disturbances: $0["disturbances"], restingHr: $0["restingHr"],
+                                avgHrv: $0["avgHrv"], recovery: $0["recovery"],
+                                strain: $0["strain"], exerciseCount: $0["exerciseCount"],
+                                spo2Pct: $0["spo2Pct"], skinTempDevC: $0["skinTempDevC"],
+                                respRateBpm: $0["respRateBpm"])
+                }
+        }
+    }
+
+    /// Most recent sleep session for a device, regardless of date. Returns nil if none exist.
+    public func latestSleepSession(deviceId: String) async throws -> CachedSleepSession? {
+        try syncRead { db in
+            try Row.fetchOne(db, sql: """
+                SELECT startTs, endTs, efficiency, restingHr, avgHrv, stagesJSON FROM sleepSession
+                WHERE deviceId = ?
+                ORDER BY startTs DESC LIMIT 1
+                """, arguments: [deviceId])
+                .map {
+                    CachedSleepSession(startTs: $0["startTs"], endTs: $0["endTs"],
+                                       efficiency: $0["efficiency"], restingHr: $0["restingHr"],
+                                       avgHrv: $0["avgHrv"], stagesJSON: $0["stagesJSON"])
+                }
+        }
+    }
+
     /// Cached sleep sessions overlapping [from, to] (by startTs), oldest first.
     public func sleepSessions(deviceId: String, from: Int, to: Int, limit: Int) async throws -> [CachedSleepSession] {
         try syncRead { db in

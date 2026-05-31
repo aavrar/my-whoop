@@ -193,20 +193,21 @@ struct HeartRateDetailView: View {
     }
 
     private var windowLabel: String {
-        let now = Date()
-        let start = Date(timeIntervalSince1970: now.timeIntervalSince1970 - TimeInterval(selectedWindow.seconds))
-        let fmt = DateFormatter()
+        let ref   = TimeInterval(metrics.dataReferenceEpoch)
+        let start = Date(timeIntervalSince1970: ref - TimeInterval(selectedWindow.seconds))
+        let end   = Date(timeIntervalSince1970: ref)
+        let fmt   = DateFormatter()
         fmt.dateFormat = "MMM d, h:mm a"
-        return "\(fmt.string(from: start)) – now"
+        return "\(fmt.string(from: start)) – \(fmt.string(from: end))"
     }
 
     // MARK: - Data loading
 
     private func reload() async {
         isLoading = true
-        let now = Int(Date().timeIntervalSince1970)
-        let from = now - selectedWindow.seconds
-        points = await metrics.hrSeries(fromEpoch: from, toEpoch: now, maxPoints: selectedWindow.maxPoints)
+        let ref  = metrics.dataReferenceEpoch
+        let from = ref - selectedWindow.seconds
+        points = await metrics.hrSeries(fromEpoch: from, toEpoch: ref + 3600, maxPoints: selectedWindow.maxPoints)
         isLoading = false
     }
 }
