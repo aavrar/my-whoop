@@ -172,9 +172,16 @@ struct TodayView: View {
         fmt.timeZone = TimeZone(identifier: "UTC")
         fmt.dateFormat = "yyyy-MM-dd"
         guard let targetDate = browsedDate(offset) else { isLoadingDay = false; return }
-        let (daily, session) = await metrics.metricsForDay(fmt.string(from: targetDate))
-        browsedMetric = daily
-        browsedSession = session
+        let day = fmt.string(from: targetDate)
+        let (daily, session) = await metrics.metricsForDay(day)
+        // Wall-clock "today" may have no daily row yet while the band RTC was ahead; fall back to
+        // the most-recent computed day so recovery/strain aren't blank after a skew repair.
+        if offset == 0, daily == nil, let latest = metrics.today {
+            browsedMetric = latest
+        } else {
+            browsedMetric = daily
+        }
+        browsedSession = session ?? (offset == 0 ? metrics.lastNight : nil)
         isLoadingDay = false
     }
 

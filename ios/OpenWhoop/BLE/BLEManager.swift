@@ -101,6 +101,8 @@ public final class BLEManager: NSObject, ObservableObject {
     let deviceId: String
     /// Captured (device↔wall) correlation from GET_CLOCK; nil until the response lands.
     private(set) var clockRef: ClockRef?
+    /// Shared store handle (for post-offload timestamp repair + compute).
+    private var whoopStore: WhoopStore?
 
     public init(state: LiveState, deviceId: String = "my-whoop") {
         self.state = state
@@ -129,6 +131,7 @@ public final class BLEManager: NSObject, ObservableObject {
         guard collector == nil else { return }
         guard let path = try? StorePaths.defaultDatabasePath() else { return }
         guard let store = try? await WhoopStore(path: path) else { return }
+        whoopStore = store
         try? await store.upsertDevice(id: deviceId, mac: nil, name: "WHOOP 4.0")
         // Research toggle — OFF by default. When disabled the app is decoded-only and never
         // persists raw frames. Flip "enableRawCapture" in UserDefaults to capture raw again.
@@ -143,6 +146,11 @@ public final class BLEManager: NSObject, ObservableObject {
         let persistedSkew = RtcSkew.load()             // last good RTC error; GET_DATA_RANGE refreshes it
         backfiller?.rtcSkew = persistedSkew
         collector?.rtcSkew = persistedSkew
+        let wall = Int(Date().timeIntervalSince1970)
+        if let n = try? await store.repairFutureTimestamps(deviceId: deviceId, wallNow: wall), n > 0 {
+            log("Repaired \(n) future-dated stream row(s) (strap RTC ahead of wall)")
+            Task { _ = await BackgroundCompute.run(days: 14, force: true) }
+        }
         if let cfg = AppConfig.uploaderConfig(deviceId: deviceId) {
             uploader = Uploader(config: cfg, store: store, deviceId: deviceId)
             serverSync = ServerSync(config: cfg, store: store, deviceId: deviceId)
@@ -377,7 +385,15 @@ public final class BLEManager: NSObject, ObservableObject {
             UserDefaults.standard.set(state.lastSyncedAt, forKey: "lastSyncedAt")
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             SyncStatusNotifier.post()
-            Task { _ = await BackgroundCompute.run(days: 3, force: true) }
+            Task {
+                if let store = self.whoopStore {
+                    let wall = Int(Date().timeIntervalSince1970)
+                    if let n = try? await store.repairFutureTimestamps(deviceId: self.deviceId, wallNow: wall), n > 0 {
+                        self.log("Repaired \(n) future-dated stream row(s) after offload")
+                    }
+                }
+                _ = await BackgroundCompute.run(days: 14, force: true)
+            }
         }
         checkStrapLiveness()         // safety-net: strap ahead of us AND our frontier frozen ⇒ stuck?
     }

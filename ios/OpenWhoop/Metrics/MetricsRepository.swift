@@ -125,6 +125,12 @@ final class MetricsRepository: ObservableObject {
         await ensureOpen()
         guard let store else { return }
 
+        let wall = Int(Date().timeIntervalSince1970)
+        if let n = try? await store.repairFutureTimestamps(deviceId: deviceId, wallNow: wall), n > 0 {
+            let engine = OnDeviceEngine(store: store, deviceId: deviceId)
+            await engine.computeRecent(days: 14, force: true)
+        }
+
         // Use the most-recent metric regardless of wall-clock date. This handles the common
         // case where the band's RTC is behind wall time (e.g. long gap since last official sync).
         today = try? await store.latestDailyMetric(deviceId: deviceId)

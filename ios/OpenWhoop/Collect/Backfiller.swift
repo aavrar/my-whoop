@@ -134,7 +134,8 @@ final class Backfiller {
             // truly required to map REALTIME (type-40/43) device-epoch timestamps, never in a hist chunk.
             let ref = clockRef ?? { let now = Int(Date().timeIntervalSince1970); return ClockRef(device: now, wall: now) }()
             let parsed = frames.map { parseFrame($0) }
-            let decoded = extract(parsed, ref.device, ref.wall, rtcSkew)
+            var decoded = extract(parsed, ref.device, ref.wall, rtcSkew)
+            decoded = HistoricalTimestampNormalize.applyIfNeeded(decoded, wall: ref.wall)
             do { try await store.insert(decoded, deviceId: deviceId) } catch { return }
 
             // RAW: only persisted when the research toggle is ON. Default OFF → decoded-only; the
