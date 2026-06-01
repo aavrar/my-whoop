@@ -248,6 +248,18 @@ public final class BLEManager: NSObject, ObservableObject {
         log("→ \(command.label) payload=\(hex(payload))")
     }
 
+    /// READ-ONLY diagnostic: query the strap's biometric-logging feature flags and log each value.
+    /// Tells us whether flash logging was gated off (enable_write_r24/r25 = OFF) after a reset.
+    public func dumpFeatureFlags() {
+        let flags = ["enable_write_r24_packets", "enable_write_r25_packets",
+                     "sigproc_10_sec_dp", "enable_r19_packets",
+                     "enable_r19_v4_packets", "enable_sigproc_walk_detector"]
+        log("Reading feature flags…")
+        for name in flags {
+            send(.getFeatureFlag, payload: WhoopCommand.featureFlagQuery(name), writeType: .withResponse)
+        }
+    }
+
     /// Ack one HISTORY_END chunk so the strap may trim it. Confirmed write — the strap forgets
     /// the chunk once this lands (link-layer half of safe-trim; decoded + raw already persisted).
     ///
@@ -820,6 +832,15 @@ extension BLEManager: CBPeripheralDelegate {
                     }
                     let fmt = DateFormatter(); fmt.dateFormat = "MMM d HH:mm"
                     log("Strap newest type-47 record (raw RTC): \(fmt.string(from: Date(timeIntervalSince1970: TimeInterval(newest))))")
+                }
+                if frame.count > 6, frame[6] == WhoopCommand.getFeatureFlag.rawValue {
+                    let payload = Array(frame[7...])
+                    if payload.count >= 36 {
+                        let key = String(decoding: payload[3..<35].prefix(while: { $0 != 0 }), as: UTF8.self)
+                        let value = payload[35...].first(where: { $0 == 0x31 || $0 == 0x32 })
+                        let stateLabel = value == 0x31 ? "ON" : value == 0x32 ? "OFF" : "?"
+                        log("FF \(key) = \(stateLabel)")
+                    }
                 }
                 // Clock correlation runs in both live and backfill modes. Once established it
                 // unblocks both the Collector (live path) and the Backfiller (chunk decoding).

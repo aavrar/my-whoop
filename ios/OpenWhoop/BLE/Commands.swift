@@ -40,6 +40,10 @@ public enum WhoopCommand: UInt8, CaseIterable {
     /// biometric retention + disconnected operation). Safe/reversible (just a data stream). Verified
     /// on-device: 2.1/s → 0/s, and it persists across reconnect.
     case sendR10R11Realtime    = 63
+    /// READ-ONLY query of a strap feature-flag value. Payload `[0x01] + 32-byte name`. The strap
+    /// replies on cmd-notify with the value ('1'=ON / '2'=OFF). Used to check whether biometric
+    /// flash-logging gates (enable_write_r24/r25_packets) were left OFF after an RTC/config reset.
+    case getFeatureFlag        = 128
 
     // MARK: Alarm commands (confirmed for interoperability)
     /// Arm the strap's FIRMWARE alarm for a specific UTC time. The strap will buzz at that time
@@ -80,6 +84,7 @@ public enum WhoopCommand: UInt8, CaseIterable {
         case .runHapticsPattern:     return "Run Haptics Pattern"
         case .stopHaptics:           return "Stop Haptics"
         case .sendR10R11Realtime:    return "R10/R11 Realtime (raw stream)"
+        case .getFeatureFlag:        return "Get Feature Flag"
         case .setAlarmTime:          return "Set Alarm Time"
         case .getAlarmTime:          return "Get Alarm Time"
         case .runAlarm:              return "Run Alarm"
@@ -101,6 +106,13 @@ public enum WhoopCommand: UInt8, CaseIterable {
          UInt8((epochSec >> 16) & 0xFF),
          UInt8((epochSec >> 24) & 0xFF),
          0x00, 0x00]
+    }
+
+    /// GET_FF_VALUE (128) payload: `[0x01] + <name UTF-8, zero-padded to 32 bytes>`. Read-only.
+    public static func featureFlagQuery(_ name: String) -> [UInt8] {
+        var key = Array(name.utf8.prefix(32))
+        key.append(contentsOf: repeatElement(0, count: 32 - key.count))
+        return [0x01] + key
     }
 
     /// COMMAND packet type byte (PacketType.COMMAND).

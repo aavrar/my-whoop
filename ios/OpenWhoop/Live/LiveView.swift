@@ -420,6 +420,17 @@ private struct LiveContentView: View {
                     .tint(WH.Color.strainBlue)
                     .foregroundStyle(WH.Color.textPrimary)
 
+                consoleButton("Read feature flags (diagnostic)",
+                              icon: "flag.checkered",
+                              accent: WH.Color.teal, prominent: false) {
+                    model.dumpFeatureFlags()
+                }
+                Text("Reads the strap's biometric-logging gates (enable_write_r24/r25). "
+                     + "Check the log: OFF means the strap stopped recording history.")
+                    .font(WH.Font.caption)
+                    .foregroundStyle(WH.Color.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 Text("Off = decoded-only (default). On captures raw frames locally for RE; "
                      + "takes effect on next launch.")
                     .font(WH.Font.caption)
