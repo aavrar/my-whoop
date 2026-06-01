@@ -23,6 +23,8 @@ final class MetricsRepository: ObservableObject {
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastError: String?
     @Published private(set) var lastRefreshedAt: Date?
+    /// Bumped after local recompute / sleep edit so tabs reload cached rows.
+    @Published private(set) var storeRevision = 0
 
     // Injected directly (test path): store + sync are ready immediately; skip ensureOpen.
     private var store: WhoopStore?
@@ -98,6 +100,15 @@ final class MetricsRepository: ObservableObject {
         return MetricsRepository(store: store, serverSync: sync, deviceId: deviceId)
     }
 
+
+    private func preferredSession(_ sessions: [CachedSleepSession]) -> CachedSleepSession? {
+        sessions.max { a, b in
+            if a.isManualOverride != b.isManualOverride { return !a.isManualOverride }
+            if a.endTs != b.endTs { return a.endTs < b.endTs }
+            return a.startTs < b.startTs
+        }
+    }
+
     // MARK: - Data reference date (band-clock-aware)
 
     /// The date of the most recently computed daily metric. When the band's RTC is behind
@@ -134,7 +145,22 @@ final class MetricsRepository: ObservableObject {
         // Use the most-recent metric regardless of wall-clock date. This handles the common
         // case where the band's RTC is behind wall time (e.g. long gap since last official sync).
         today = try? await store.latestDailyMetric(deviceId: deviceId)
-        lastNight = try? await store.latestSleepSession(deviceId: deviceId)
+        if let latest = try? await store.latestSleepSession(deviceId: deviceId) {
+            let around = (try? await store.sleepSessions(
+                deviceId: deviceId,
+                from: latest.endTs - 86_400,
+                to: latest.endTs + 86_400,
+                limit: 50)) ?? [latest]
+            lastNight = preferredSession(around)
+        } else {
+            lastNight = nil
+        }
+    }
+
+    /// Reload cache after on-device edits (sleep override, timestamp repair, etc.).
+    func reloadFromStore() async {
+        await load()
+        storeRevision += 1
     }
 
     // MARK: - Refresh from server then reload
@@ -162,6 +188,11 @@ final class MetricsRepository: ObservableObject {
             await engine.computeRecent(days: 14, force: true)
         }
         await load()
+        if let store, today?.strain == nil {
+            let engine = OnDeviceEngine(store: store, deviceId: deviceId)
+            await engine.computeRecent(days: 3, force: true)
+            await load()
+        }
         await syncToHealthKit()
         WidgetDataStore.write(today: today, lastNight: lastNight)
         isRefreshing = false
@@ -227,8 +258,11 @@ final class MetricsRepository: ObservableObject {
         let sessions = (try? await store.sleepSessions(deviceId: deviceId,
                                                         from: dayStart - 43200,
                                                         to: dayStart + 86400,
-                                                        limit: 5)) ?? []
-        let session = sessions.first { fmt.string(from: Date(timeIntervalSince1970: TimeInterval($0.endTs))) == day }
+                                                        limit: 20)) ?? []
+        let matching = sessions.filter {
+            fmt.string(from: Date(timeIntervalSince1970: TimeInterval($0.endTs))) == day
+        }
+        let session = preferredSession(matching)
         return (daily, session)
     }
 
@@ -258,8 +292,13 @@ final class MetricsRepository: ObservableObject {
         await ensureOpen()
         guard let store else { return nil }
 
-        // Use the most-recent session regardless of wall-clock date (handles band clock drift).
-        guard let session = (try? await store.latestSleepSession(deviceId: deviceId)) else { return nil }
+        guard let latest = try? await store.latestSleepSession(deviceId: deviceId) else { return nil }
+        let around = (try? await store.sleepSessions(
+            deviceId: deviceId,
+            from: latest.endTs - 86_400,
+            to: latest.endTs + 86_400,
+            limit: 50)) ?? [latest]
+        guard let session = preferredSession(around) else { return nil }
 
         // Derive the YYYY-MM-DD day that the session's endTs falls on (UTC).
         let fmt = DateFormatter()
@@ -284,7 +323,6 @@ final class MetricsRepository: ObservableObject {
         await ensureOpen()
         guard let store else { return [] }
 
-        // Anchor to the latest known session so we work even when the band clock is behind.
         guard let latest = try? await store.latestSleepSession(deviceId: deviceId) else { return [] }
         let windowEnd   = latest.endTs + 86_400
         let windowStart = windowEnd - (nights + 2) * 86_400
@@ -303,13 +341,33 @@ final class MetricsRepository: ObservableObject {
     /// Returns [] on any network error or when unconfigured.
     func hrSeries(fromEpoch: Int, toEpoch: Int, maxPoints: Int) async -> [TrendPoint] {
         await ensureOpen()
-        guard let serverSync else { return [] }
-        let raw = await serverSync.getHRSeries(fromEpoch: fromEpoch, toEpoch: toEpoch, maxPoints: maxPoints)
-        return raw.map { pair in
-            TrendPoint(
-                id: "\(pair.ts)",
-                date: Date(timeIntervalSince1970: TimeInterval(pair.ts)),
-                value: Double(pair.bpm)
+        if let serverSync {
+            let raw = await serverSync.getHRSeries(fromEpoch: fromEpoch, toEpoch: toEpoch, maxPoints: maxPoints)
+            if !raw.isEmpty {
+                return raw.map { pair in
+                    TrendPoint(
+                        id: "\(pair.ts)",
+                        date: Date(timeIntervalSince1970: TimeInterval(pair.ts)),
+                        value: Double(pair.bpm)
+                    )
+                }
+            }
+        }
+        return await localHRSeries(fromEpoch: fromEpoch, toEpoch: toEpoch, maxPoints: maxPoints)
+    }
+
+    private func localHRSeries(fromEpoch: Int, toEpoch: Int, maxPoints: Int) async -> [TrendPoint] {
+        guard let store else { return [] }
+        let samples = (try? await store.hrSamples(
+            deviceId: deviceId, from: fromEpoch, to: toEpoch, limit: 500_000)) ?? []
+        guard !samples.isEmpty else { return [] }
+        let step = max(1, samples.count / max(maxPoints, 1))
+        return Swift.stride(from: 0, to: samples.count, by: step).map { i in
+            let s = samples[i]
+            return TrendPoint(
+                id: "\(s.ts)",
+                date: Date(timeIntervalSince1970: TimeInterval(s.ts)),
+                value: Double(s.bpm)
             )
         }
     }

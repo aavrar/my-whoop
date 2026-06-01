@@ -20,7 +20,11 @@ struct TodayView: View {
     private var utcCalendar: Calendar {
         var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: "UTC")!; return c
     }
-    private var anchorToday: Date { utcCalendar.startOfDay(for: Date()) }
+    private var anchorToday: Date {
+        // Use the data reference day so "Today" aligns with where the on-device compute wrote rows.
+        // This avoids a blank "Today" when wall-clock UTC day and data day differ.
+        utcCalendar.startOfDay(for: metrics.dataReferenceDate)
+    }
 
     var body: some View {
         NavigationStack {
@@ -53,6 +57,9 @@ struct TodayView: View {
         .task {
             await metrics.load()
             await loadBrowsedDay(offset: dayOffset)
+        }
+        .onChange(of: metrics.storeRevision) { _ in
+            Task { await loadBrowsedDay(offset: dayOffset) }
         }
         .refreshable {
             guard dayOffset == 0 else { return }
@@ -174,10 +181,8 @@ struct TodayView: View {
         guard let targetDate = browsedDate(offset) else { isLoadingDay = false; return }
         let day = fmt.string(from: targetDate)
         let (daily, session) = await metrics.metricsForDay(day)
-        // Wall-clock "today" may have no daily row yet while the band RTC was ahead; fall back to
-        // the most-recent computed day so recovery/strain aren't blank after a skew repair.
-        if offset == 0, daily == nil, let latest = metrics.today {
-            browsedMetric = latest
+        if offset == 0, let latest = metrics.today, latest.day == day {
+            browsedMetric = daily ?? latest
         } else {
             browsedMetric = daily
         }
@@ -252,6 +257,11 @@ struct TodayView: View {
     private var sleepCard: some View {
         let sleepMin: Double? = {
             if let m = shownMetric?.totalSleepMin, m > 0 { return m }
+            if let d = shownSession, let stages = parseStages(d.stagesJSON) {
+                let asleep = stages.filter { $0.stage != "wake" }
+                    .map { $0.end - $0.start }.reduce(0, +) / 60
+                if asleep > 0 { return asleep }
+            }
             if let s = shownSession { let d = Double(s.endTs - s.startTs) / 60; return d > 0 ? d : nil }
             return nil
         }()

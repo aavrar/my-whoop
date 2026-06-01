@@ -2,7 +2,8 @@ import Foundation
 
 public enum Strain {
     static let strainDenominator: Double = 7201.0
-    static let minReadings = 600
+    /// Full-day target (~10 h at 1 Hz). Shorter windows use a proportionally lower floor.
+    static let fullDayMinReadings = 600
 
     public static func compute(
         hr: [(ts: Int, bpm: Int)],
@@ -11,6 +12,9 @@ public enum Strain {
         sex: String = "male",
         method: String = "edwards"
     ) -> Double? {
+        guard !hr.isEmpty else { return nil }
+        let span = (hr.map(\.ts).max() ?? 0) - (hr.map(\.ts).min() ?? 0)
+        let minReadings = min(fullDayMinReadings, max(60, span / 12))
         guard hr.count >= minReadings else { return nil }
 
         let hrMax = 208.0 - 0.7 * Double(age)

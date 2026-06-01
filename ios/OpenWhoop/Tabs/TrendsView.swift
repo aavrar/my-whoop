@@ -78,10 +78,10 @@ struct TrendsView: View {
     /// If no data is returned for 24h, automatically widens to 7 days so real data shows.
     private func reloadHR() async {
         hrIsLoading = true
-        let now = Int(Date().timeIntervalSince1970)
-        var pts = await metrics.hrSeries(fromEpoch: now - 86_400, toEpoch: now, maxPoints: 300)
+        let ref = metrics.dataReferenceEpoch
+        var pts = await metrics.hrSeries(fromEpoch: ref - 86_400, toEpoch: ref + 3600, maxPoints: 300)
         if pts.isEmpty {
-            pts = await metrics.hrSeries(fromEpoch: now - 7 * 86_400, toEpoch: now, maxPoints: 300)
+            pts = await metrics.hrSeries(fromEpoch: ref - 7 * 86_400, toEpoch: ref + 3600, maxPoints: 300)
         }
         hrPoints = pts
         hrIsLoading = false

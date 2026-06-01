@@ -174,7 +174,7 @@ extension WhoopStore {
             try Row.fetchOne(db, sql: """
                 SELECT startTs, endTs, efficiency, restingHr, avgHrv, stagesJSON, isManualOverride FROM sleepSession
                 WHERE deviceId = ?
-                ORDER BY startTs DESC LIMIT 1
+                ORDER BY isManualOverride DESC, endTs DESC, startTs DESC LIMIT 1
                 """, arguments: [deviceId])
                 .map {
                     CachedSleepSession(startTs: $0["startTs"], endTs: $0["endTs"],

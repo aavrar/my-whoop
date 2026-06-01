@@ -58,14 +58,21 @@ struct SleepView: View {
             await loadData()
         }
         .refreshable {
-            await loadData()
+            await loadData(refresh: true)
+        }
+        .onChange(of: metrics.storeRevision) { _ in
+            Task { await loadData() }
         }
     }
 
     // MARK: - Data loading
 
-    private func loadData() async {
-        await metrics.refresh()
+    private func loadData(refresh: Bool = false) async {
+        if refresh {
+            await metrics.refresh()
+        } else {
+            await metrics.load()
+        }
         detail = await metrics.sleepDetail()
         weekNights = await metrics.sevenNightSleepWake(nights: 7)
     }
@@ -173,6 +180,11 @@ struct SleepView: View {
 
         let totalMinutes: Double? = {
             if let m = daily?.totalSleepMin, m > 0 { return m }
+            if let s = session, let stages = parseStages(s.stagesJSON) {
+                let asleep = stages.filter { $0.stage != "wake" }
+                    .map { $0.end - $0.start }.reduce(0, +) / 60
+                if asleep > 0 { return asleep }
+            }
             if let s = session {
                 let d = Double(s.endTs - s.startTs) / 60
                 return d > 0 ? d : nil

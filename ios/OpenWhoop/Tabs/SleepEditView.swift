@@ -16,6 +16,7 @@ struct SleepEditView: View {
     @State private var extraStart: Date
     @State private var extraEnd: Date
     @State private var isSaving = false
+    @State private var errorMessage: String? = nil
 
     init(session: CachedSleepSession, deviceId: String, onSave: @escaping () async -> Void) {
         self.session = session
@@ -45,6 +46,11 @@ struct SleepEditView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbarColorScheme(.dark, for: .navigationBar)
             .preferredColorScheme(.dark)
+            .alert("Could not save", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+                Button("OK", role: .cancel) { errorMessage = nil }
+            } message: {
+                Text(errorMessage ?? "")
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") { dismiss() }
@@ -146,7 +152,9 @@ struct SleepEditView: View {
 
         guard let path = try? StorePaths.defaultDatabasePath(),
               let store = try? await WhoopStore(path: path) else {
-            isSaving = false; return
+            errorMessage = "Could not open local database"
+            isSaving = false
+            return
         }
 
         let mainStartTs = Int(sleepStart.timeIntervalSince1970)
@@ -173,8 +181,14 @@ struct SleepEditView: View {
             isManualOverride: true
         )
 
-        try? await store.deleteSleepSession(deviceId: deviceId, startTs: session.startTs)
-        try? await store.upsertSleepSessions([overrideSession], deviceId: deviceId)
+        do {
+            try await store.deleteSleepSession(deviceId: deviceId, startTs: session.startTs)
+            _ = try await store.upsertSleepSessions([overrideSession], deviceId: deviceId)
+        } catch {
+            errorMessage = "DB write failed: \(error.localizedDescription)"
+            isSaving = false
+            return
+        }
 
         // Engine re-runs to recompute HRV/RHR/recovery/strain from the corrected window.
         // It will use our pre-built stagesJSON and skip its own staging pass.
@@ -190,6 +204,7 @@ struct SleepEditView: View {
         }
         await engine.computeRecent(days: 3, force: true)
 
+        await metrics.reloadFromStore()
         await onSave()
         isSaving = false
         dismiss()

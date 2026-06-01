@@ -146,6 +146,8 @@ struct HypnogramView: View {
 
         return GeometryReader { geo in
             let totalWidth = geo.size.width
+            let laneStages = stages.filter { $0.stage == lane }.sorted { $0.start < $1.start }
+            let boundaries: [Double] = laneStages.map(\.end)
 
             ZStack(alignment: .leading) {
                 // Track background
@@ -154,7 +156,7 @@ struct HypnogramView: View {
                     .frame(height: laneHeight)
 
                 // Stage bricks for this lane
-                ForEach(Array(stages.filter { $0.stage == lane }.enumerated()), id: \.offset) { _, seg in
+                ForEach(Array(laneStages.enumerated()), id: \.offset) { _, seg in
                     let xFrac  = (seg.start - nightStart) / nightDuration
                     let wFrac  = (seg.end   - seg.start)  / nightDuration
                     let xPos   = totalWidth * CGFloat(max(0, xFrac))
@@ -162,7 +164,18 @@ struct HypnogramView: View {
 
                     RoundedRectangle(cornerRadius: 2, style: .continuous)
                         .fill(stageColor(lane))
-                        .frame(width: max(bWidth, 2), height: laneHeight - 4)
+                        // Leave a 1-pt gap so segments are visually separated.
+                        .frame(width: max(bWidth - 1, 2), height: laneHeight - 4)
+                        .offset(x: xPos + 0.5)
+                }
+
+                // Divider lines at segment boundaries (the "interspered breaks" look).
+                ForEach(Array(boundaries.enumerated()), id: \.offset) { _, t in
+                    let xFrac = (t - nightStart) / nightDuration
+                    let xPos  = totalWidth * CGFloat(max(0, min(1, xFrac)))
+                    Rectangle()
+                        .fill(WH.Color.surface2.opacity(0.9))
+                        .frame(width: 1, height: laneHeight - 2)
                         .offset(x: xPos)
                 }
             }

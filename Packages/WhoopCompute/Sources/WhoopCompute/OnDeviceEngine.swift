@@ -65,7 +65,7 @@ public actor OnDeviceEngine {
 
             if !force,
                let existing = try? await store.dailyMetrics(deviceId: deviceId, from: dayStr, to: dayStr).first,
-               existing.recovery != nil {
+               (existing.recovery != nil && existing.strain != nil) {
                 continue
             }
 
@@ -146,10 +146,10 @@ public actor OnDeviceEngine {
             restingHr: resting, avgHrv: avgHRV, stages: stages
         )
 
-        let sleepMinutes = stageDuration(stages, stage: nil, start: sleepRun.start, end: sleepRun.end) / 60
         let deepMin   = stageDuration(stages, stage: "deep") / 60
         let remMin    = stageDuration(stages, stage: "rem")  / 60
         let lightMin  = stageDuration(stages, stage: "light") / 60
+        let sleepMinutes = deepMin + remMin + lightMin
         let disturbances = countDisturbances(stages: stages)
 
         let nowTs = Int(Date().timeIntervalSince1970)
@@ -220,14 +220,27 @@ public actor OnDeviceEngine {
 
         let needMin = SleepNeed.need(strain: strain, recovery: recovery)
 
-        let cachedSession = CachedSleepSession(
-            startTs: session.startTs, endTs: session.endTs,
-            efficiency: session.efficiency,
-            restingHr: session.restingHr,
-            avgHrv: session.avgHrv,
-            stagesJSON: encodeStages(session.stages),
-            isManualOverride: overrideSession != nil   // preserve the flag
-        )
+        // Manual edits own start/end/stages; recompute only refreshes derived vitals on that row.
+        let cachedSession: CachedSleepSession
+        if let override = overrideSession {
+            cachedSession = CachedSleepSession(
+                startTs: override.startTs, endTs: override.endTs,
+                efficiency: session.efficiency,
+                restingHr: session.restingHr,
+                avgHrv: session.avgHrv,
+                stagesJSON: override.stagesJSON,
+                isManualOverride: true
+            )
+        } else {
+            cachedSession = CachedSleepSession(
+                startTs: session.startTs, endTs: session.endTs,
+                efficiency: session.efficiency,
+                restingHr: session.restingHr,
+                avgHrv: session.avgHrv,
+                stagesJSON: encodeStages(session.stages),
+                isManualOverride: false
+            )
+        }
         try? await store.upsertSleepSessions([cachedSession], deviceId: deviceId)
 
         let metric = DailyMetric(

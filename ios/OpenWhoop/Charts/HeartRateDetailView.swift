@@ -201,13 +201,26 @@ struct HeartRateDetailView: View {
         return "\(fmt.string(from: start)) – \(fmt.string(from: end))"
     }
 
+
+    private func hasCoverage(_ pts: [TrendPoint], for window: Window) -> Bool {
+        guard !pts.isEmpty else { return false }
+        if window == .sixHours || window == .oneDay { return pts.count >= 2 }
+        let minPoints = window == .threeDays ? 60 : 120
+        guard pts.count >= minPoints else { return false }
+        guard let first = pts.first?.date.timeIntervalSince1970,
+              let last = pts.last?.date.timeIntervalSince1970 else { return false }
+        let span = Int(last - first)
+        return span >= Int(Double(window.seconds) * 0.5)
+    }
+
     // MARK: - Data loading
 
     private func reload() async {
         isLoading = true
         let ref  = metrics.dataReferenceEpoch
         let from = ref - selectedWindow.seconds
-        points = await metrics.hrSeries(fromEpoch: from, toEpoch: ref + 3600, maxPoints: selectedWindow.maxPoints)
+        let loaded = await metrics.hrSeries(fromEpoch: from, toEpoch: ref + 3600, maxPoints: selectedWindow.maxPoints)
+        points = hasCoverage(loaded, for: selectedWindow) ? loaded : []
         isLoading = false
     }
 }
