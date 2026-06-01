@@ -1,42 +1,71 @@
 import SwiftUI
-
-// MARK: - TodayView
-// The command-centre "Today" tab. Renders server-cached recovery/strain/sleep/HRV/RHR
-// metrics pulled from MetricsRepository.
-// Tapping any metric card → MetricDetailView (full history, range selector).
+import WhoopStore
 
 struct TodayView: View {
     @EnvironmentObject private var metrics: MetricsRepository
     @EnvironmentObject private var live: LiveViewModel
 
+    // Day browsing — 0 = today (UTC), negative = days into the past. Anchored to the actual
+    // calendar day in UTC (daily rows are keyed by UTC day strings), so the label always matches
+    // the data shown. Today legitimately reads "pending" until last night's sleep has synced.
+    @State private var dayOffset = 0
+    @State private var browsedMetric: DailyMetric?
+    @State private var browsedSession: CachedSleepSession?
+    @State private var isLoadingDay = false
+    @State private var navDirection = 0  // -1 going back, +1 going forward, for transition
+
+    private var shownMetric: DailyMetric? { browsedMetric }
+    private var shownSession: CachedSleepSession? { browsedSession }
+
+    private var utcCalendar: Calendar {
+        var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: "UTC")!; return c
+    }
+    private var anchorToday: Date { utcCalendar.startOfDay(for: Date()) }
+
     var body: some View {
         NavigationStack {
             ZStack {
                 WH.Color.background.ignoresSafeArea()
-
                 Group {
                     if metrics.isRefreshing && metrics.today == nil && metrics.lastNight == nil {
                         loadingView
                     } else {
                         scrollContent
+                            .id(dayOffset)
+                            .transition(.asymmetric(
+                                insertion: .move(edge: navDirection < 0 ? .trailing : .leading),
+                                removal:   .move(edge: navDirection < 0 ? .leading  : .trailing)
+                            ))
                     }
                 }
             }
-            // Hide the system nav bar on the root so the custom ScreenHeader sits tight
-            // below the status bar/Dynamic Island. Pushed detail views manage their own bars.
             .toolbar(.hidden, for: .navigationBar)
+            .gesture(
+                DragGesture(minimumDistance: 40)
+                    .onEnded { v in
+                        guard abs(v.translation.width) > abs(v.translation.height) * 1.2 else { return }
+                        if v.translation.width < -40 { navigateDay(by: -1) }
+                        else if v.translation.width > 40 { navigateDay(by: 1) }
+                    }
+            )
         }
         .preferredColorScheme(.dark)
-        .task { await metrics.load() }
-        .refreshable { await metrics.refresh() }
+        .task {
+            await metrics.load()
+            await loadBrowsedDay(offset: dayOffset)
+        }
+        .refreshable {
+            guard dayOffset == 0 else { return }
+            await metrics.refresh()
+            await loadBrowsedDay(offset: dayOffset)
+        }
     }
 
     // MARK: - Loading
 
     private var loadingView: some View {
         VStack(spacing: WH.Spacing.md) {
-            ProgressView()
-                .tint(WH.Color.textSecondary)
+            ProgressView().tint(WH.Color.textSecondary)
             Text("Loading metrics…")
                 .font(WH.Font.caption)
                 .foregroundStyle(WH.Color.textSecondary)
@@ -50,43 +79,54 @@ struct TodayView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: WH.Spacing.lg) {
 
-                // Custom tight header (replaces the hidden system large-title nav bar)
-                ScreenHeader("Today") {
-                    Text(currentDateLabel())
-                        .font(WH.Font.caption)
-                        .foregroundStyle(WH.Color.textSecondary)
+                ScreenHeader(headerTitle) {
+                    HStack(spacing: WH.Spacing.sm) {
+                        if dayOffset < 0 {
+                            Button { navigateDay(by: 1) } label: {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(WH.Color.strainBlue)
+                            }
+                        }
+                        Text(dateLabel)
+                            .font(WH.Font.caption)
+                            .foregroundStyle(WH.Color.textSecondary)
+                            .animation(nil, value: dayOffset)
+                        Button { navigateDay(by: -1) } label: {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(WH.Color.strainBlue)
+                        }
+                    }
                 }
 
-                // Hero recovery ring (tappable → recovery history)
-                heroSection
+                if isLoadingDay {
+                    HStack { Spacer(); ProgressView().tint(WH.Color.textSecondary); Spacer() }
+                        .padding(.vertical, WH.Spacing.xl)
+                } else {
+                    heroSection
 
-                // Strain card → strain history
-                NavigationLink(destination: MetricDetailView(kind: .strain)) {
-                    strainCard
-                }
-                .buttonStyle(.plain)
+                    NavigationLink(destination: MetricDetailView(kind: .strain)) {
+                        strainCard
+                    }.buttonStyle(.plain)
 
-                // Sleep card → sleep duration history
-                NavigationLink(destination: MetricDetailView(kind: .sleepDuration)) {
-                    sleepCard
-                }
-                .buttonStyle(.plain)
+                    NavigationLink(destination: MetricDetailView(kind: .sleepDuration)) {
+                        sleepCard
+                    }.buttonStyle(.plain)
 
-                // HRV + RHR cards (half width each)
-                hrvAndRhrRow
+                    hrvAndRhrRow
 
-                processButton
-
-                if let err = metrics.lastError {
-                    errorBanner(err)
+                    if dayOffset == 0 { processButton }
                 }
 
-                if metrics.today == nil && metrics.lastNight == nil && !metrics.isRefreshing {
+                if let err = metrics.lastError { errorBanner(err) }
+
+                if shownMetric == nil && shownSession == nil && !metrics.isRefreshing && !isLoadingDay {
                     emptyState
                 }
 
                 strapNote
-                syncFooter
+                if dayOffset == 0 { syncFooter }
 
                 Spacer(minLength: WH.Spacing.xl)
             }
@@ -95,13 +135,56 @@ struct TodayView: View {
         .background(WH.Color.background)
     }
 
-    // MARK: - Hero section (recovery ring → recovery history)
+    // MARK: - Day navigation
+
+    private func browsedDate(_ offset: Int) -> Date? {
+        utcCalendar.date(byAdding: .day, value: offset, to: anchorToday)
+    }
+
+    private var headerTitle: String {
+        if dayOffset == 0 { return "Today" }
+        if dayOffset == -1 { return "Yesterday" }
+        guard let d = browsedDate(dayOffset) else { return "—" }
+        let fmt = DateFormatter(); fmt.timeZone = TimeZone(identifier: "UTC"); fmt.dateFormat = "EEE, MMM d"
+        return fmt.string(from: d)
+    }
+
+    private var dateLabel: String {
+        guard let d = browsedDate(dayOffset) else { return "—" }
+        let fmt = DateFormatter(); fmt.timeZone = TimeZone(identifier: "UTC"); fmt.dateFormat = "MM/dd/yy"
+        return fmt.string(from: d)
+    }
+
+    private func navigateDay(by delta: Int) {
+        let next = dayOffset + delta
+        guard next <= 0 else { return }
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+            navDirection = delta
+            dayOffset = next
+        }
+        Task { await loadBrowsedDay(offset: next) }
+    }
+
+    private func loadBrowsedDay(offset: Int) async {
+        isLoadingDay = true
+        let fmt = DateFormatter()
+        fmt.calendar = utcCalendar
+        fmt.timeZone = TimeZone(identifier: "UTC")
+        fmt.dateFormat = "yyyy-MM-dd"
+        guard let targetDate = browsedDate(offset) else { isLoadingDay = false; return }
+        let (daily, session) = await metrics.metricsForDay(fmt.string(from: targetDate))
+        browsedMetric = daily
+        browsedSession = session
+        isLoadingDay = false
+    }
+
+    // MARK: - Hero (recovery ring)
 
     private var heroSection: some View {
         HStack {
             Spacer()
             NavigationLink(destination: MetricDetailView(kind: .recovery)) {
-                if let recovery = metrics.today?.recovery {
+                if let recovery = shownMetric?.recovery {
                     RecoveryRing(percent: recovery * 100, size: 200, strokeWidth: 16)
                 } else {
                     pendingRecoveryRing
@@ -115,12 +198,8 @@ struct TodayView: View {
 
     private var pendingRecoveryRing: some View {
         ZStack {
-            Circle()
-                .stroke(WH.Color.ringTrack, lineWidth: 16)
-            Circle()
-                .stroke(WH.Color.ringTrack.opacity(0.5), lineWidth: 24)
-                .blur(radius: 6)
-
+            Circle().stroke(WH.Color.ringTrack, lineWidth: 16)
+            Circle().stroke(WH.Color.ringTrack.opacity(0.5), lineWidth: 24).blur(radius: 6)
             VStack(spacing: WH.Spacing.xs) {
                 Text("—")
                     .font(WH.Font.metricHero(size: 64))
@@ -142,16 +221,16 @@ struct TodayView: View {
 
     private var strainCard: some View {
         let value: String = {
-            guard let s = metrics.today?.strain else { return "—" }
+            guard let s = shownMetric?.strain else { return "—" }
             return String(format: "%.1f", s)
         }()
-        let hasStrain = metrics.today?.strain != nil
+        let hasStrain = shownMetric?.strain != nil
         return VStack(alignment: .leading, spacing: WH.Spacing.xs) {
             MetricCard(title: "Day Strain",
                        value: value,
                        unit: hasStrain ? "/ 21" : nil,
                        accentColor: hasStrain ? WH.Color.strainBlue : WH.Color.textSecondary)
-            if let cal = metrics.today?.calories {
+            if let cal = shownMetric?.calories {
                 Text("\(Int(cal)) cal")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(WH.Color.textSecondary)
@@ -165,21 +244,16 @@ struct TodayView: View {
 
     private var sleepCard: some View {
         let sleepMin: Double? = {
-            if let m = metrics.today?.totalSleepMin, m > 0 { return m }
-            if let s = metrics.lastNight {
-                let d = Double(s.endTs - s.startTs) / 60
-                return d > 0 ? d : nil
-            }
+            if let m = shownMetric?.totalSleepMin, m > 0 { return m }
+            if let s = shownSession { let d = Double(s.endTs - s.startTs) / 60; return d > 0 ? d : nil }
             return nil
         }()
-
         let efficiency: Double? = {
             guard sleepMin != nil else { return nil }
-            if let e = metrics.today?.efficiency, e > 0 { return e }
-            if let e = metrics.lastNight?.efficiency, e > 0 { return e }
+            if let e = shownMetric?.efficiency, e > 0 { return e }
+            if let e = shownSession?.efficiency, e > 0 { return e }
             return nil
         }()
-
         return VStack(alignment: .leading, spacing: WH.Spacing.sm) {
             HStack {
                 Text("LAST NIGHT")
@@ -188,20 +262,17 @@ struct TodayView: View {
                     .tracking(1.2)
                 Spacer()
             }
-
             if let min = sleepMin {
                 HStack(alignment: .lastTextBaseline, spacing: WH.Spacing.sm) {
                     Text(formatSleepMinutes(min))
                         .font(WH.Font.metricLarge())
                         .foregroundStyle(WH.Color.textPrimary)
                         .monospacedDigit()
-
                     if let eff = efficiency {
                         Text("·  \(Int((eff * 100).rounded()))% efficiency")
                             .font(WH.Font.unit)
                             .foregroundStyle(WH.Color.textSecondary)
                     }
-
                     Spacer(minLength: 0)
                 }
             } else {
@@ -211,8 +282,7 @@ struct TodayView: View {
             }
         }
         .padding(WH.Spacing.md)
-        .background(WH.Color.surface,
-                    in: RoundedRectangle(cornerRadius: WH.Radius.card, style: .continuous))
+        .background(WH.Color.surface, in: RoundedRectangle(cornerRadius: WH.Radius.card, style: .continuous))
     }
 
     // MARK: - HRV + RHR row
@@ -221,34 +291,27 @@ struct TodayView: View {
         HStack(spacing: WH.Spacing.sm) {
             NavigationLink(destination: MetricDetailView(kind: .hrv)) {
                 hrvCard.frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.plain)
-
+            }.buttonStyle(.plain)
             NavigationLink(destination: MetricDetailView(kind: .rhr)) {
                 rhrCard.frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.plain)
+            }.buttonStyle(.plain)
         }
     }
 
     private var hrvCard: some View {
-        let hrv = metrics.today?.avgHrv ?? metrics.lastNight?.avgHrv
-        let value = hrv.map { String(format: "%.0f", $0) } ?? "—"
-        let accent: Color = hrv != nil ? WH.Color.recoveryGreen : WH.Color.textSecondary
+        let hrv = shownMetric?.avgHrv ?? shownSession?.avgHrv
         return MetricCard(title: "HRV",
-                          value: value,
+                          value: hrv.map { String(format: "%.0f", $0) } ?? "—",
                           unit: hrv != nil ? "ms" : nil,
-                          accentColor: accent)
+                          accentColor: hrv != nil ? WH.Color.recoveryGreen : WH.Color.textSecondary)
     }
 
     private var rhrCard: some View {
-        let rhr = metrics.today?.restingHr ?? metrics.lastNight?.restingHr
-        let value = rhr.map { "\($0)" } ?? "—"
-        let accent: Color = rhr != nil ? WH.Color.textPrimary : WH.Color.textSecondary
+        let rhr = shownMetric?.restingHr ?? shownSession?.restingHr
         return MetricCard(title: "Resting HR",
-                          value: value,
+                          value: rhr.map { "\($0)" } ?? "—",
                           unit: rhr != nil ? "bpm" : nil,
-                          accentColor: accent)
+                          accentColor: rhr != nil ? WH.Color.textPrimary : WH.Color.textSecondary)
     }
 
     // MARK: - Empty state
@@ -260,21 +323,22 @@ struct TodayView: View {
                 Image(systemName: "arrow.triangle.2.circlepath")
                     .font(.system(size: 32, weight: .light))
                     .foregroundStyle(WH.Color.textSecondary)
-                Text("No metrics yet")
+                Text(dayOffset == 0 ? "No metrics yet" : "No data for this day")
                     .font(.system(size: 17, weight: .semibold, design: .rounded))
                     .foregroundStyle(WH.Color.textPrimary)
-                Text("Pull down to refresh")
-                    .font(WH.Font.caption)
-                    .foregroundStyle(WH.Color.textSecondary)
+                if dayOffset == 0 {
+                    Text("Pull down to refresh")
+                        .font(WH.Font.caption)
+                        .foregroundStyle(WH.Color.textSecondary)
+                }
             }
             .padding(.vertical, WH.Spacing.xxl)
             Spacer()
         }
     }
 
-    // MARK: - Live strap status row (HR + battery when connected; caption when not)
+    // MARK: - Live strap chips
 
-    /// Compact pill showing a single live reading (HR or battery).
     private func liveChip(icon: String, label: String, color: Color) -> some View {
         HStack(spacing: WH.Spacing.xs) {
             Image(systemName: icon)
@@ -287,27 +351,19 @@ struct TodayView: View {
         }
         .padding(.horizontal, WH.Spacing.sm)
         .padding(.vertical, WH.Spacing.xs)
-        .background(WH.Color.surface2,
-                    in: Capsule())
+        .background(WH.Color.surface2, in: Capsule())
     }
 
-    /// Shows live HR + battery pills when connected; otherwise shows the connect caption.
     private var strapNote: some View {
         Group {
             if live.state.connected, let hr = live.state.heartRate {
                 HStack(spacing: WH.Spacing.sm) {
-                    liveChip(icon: "heart.fill",
-                             label: "\(hr) BPM LIVE",
-                             color: WH.Color.recoveryRed)
+                    liveChip(icon: "heart.fill", label: "\(hr) BPM LIVE", color: WH.Color.recoveryRed)
                     if let bat = live.state.batteryPct {
                         let pct = Int(bat.rounded())
-                        let batColor: Color = pct > 30 ? WH.Color.recoveryGreen
-                                                       : WH.Color.recoveryYellow
-                        let batIcon = pct > 70 ? "battery.100" :
-                                      pct > 30 ? "battery.50"  : "battery.25"
-                        liveChip(icon: batIcon,
-                                 label: "\(pct)%",
-                                 color: batColor)
+                        let batColor: Color = pct > 30 ? WH.Color.recoveryGreen : WH.Color.recoveryYellow
+                        let batIcon = pct > 70 ? "battery.100" : pct > 30 ? "battery.50" : "battery.25"
+                        liveChip(icon: batIcon, label: "\(pct)%", color: batColor)
                     }
                     Spacer()
                 }
@@ -325,12 +381,10 @@ struct TodayView: View {
         }
     }
 
-    // MARK: - Sync footer
+    // MARK: - Process + sync footer
 
     private var processButton: some View {
-        Button {
-            Task { await metrics.refresh() }
-        } label: {
+        Button { Task { await metrics.refresh(); await loadBrowsedDay(offset: dayOffset) } } label: {
             HStack(spacing: WH.Spacing.sm) {
                 if metrics.isRefreshing {
                     ProgressView().scaleEffect(0.8).tint(.white)
@@ -353,12 +407,8 @@ struct TodayView: View {
         HStack {
             if metrics.isRefreshing {
                 HStack(spacing: WH.Spacing.xs) {
-                    ProgressView()
-                        .scaleEffect(0.7)
-                        .tint(WH.Color.textSecondary)
-                    Text("Updating…")
-                        .font(WH.Font.caption)
-                        .foregroundStyle(WH.Color.textSecondary)
+                    ProgressView().scaleEffect(0.7).tint(WH.Color.textSecondary)
+                    Text("Updating…").font(WH.Font.caption).foregroundStyle(WH.Color.textSecondary)
                 }
             } else if let at = metrics.lastRefreshedAt {
                 Text("Updated \(relativeTime(from: at))")
@@ -376,18 +426,14 @@ struct TodayView: View {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(WH.Color.recoveryYellow)
-            Text(message)
-                .font(WH.Font.caption)
-                .foregroundStyle(WH.Color.textSecondary)
-                .lineLimit(2)
+            Text(message).font(WH.Font.caption).foregroundStyle(WH.Color.textSecondary).lineLimit(2)
             Spacer()
         }
         .padding(WH.Spacing.sm)
-        .background(WH.Color.surface2,
-                    in: RoundedRectangle(cornerRadius: WH.Radius.chip, style: .continuous))
+        .background(WH.Color.surface2, in: RoundedRectangle(cornerRadius: WH.Radius.chip, style: .continuous))
     }
 
-    // MARK: - Formatting helpers
+    // MARK: - Formatting
 
     private func formatSleepMinutes(_ totalMin: Double) -> String {
         guard totalMin > 0 else { return "—" }
@@ -398,34 +444,19 @@ struct TodayView: View {
         return "\(mins)m"
     }
 
-    private func currentDateLabel() -> String {
-        let fmt = DateFormatter()
-        fmt.dateFormat = "MM/dd/yy"
-        return fmt.string(from: Date())
-    }
-
     private func relativeTime(from date: Date) -> String {
         let elapsed = Int(-date.timeIntervalSinceNow)
         switch elapsed {
-        case ..<5:   return "just now"
-        case ..<60:  return "\(elapsed)s ago"
-        case ..<3600:
-            let m = elapsed / 60
-            return "\(m)m ago"
-        default:
-            let h = elapsed / 3600
-            return "\(h)h ago"
+        case ..<5:    return "just now"
+        case ..<60:   return "\(elapsed)s ago"
+        case ..<3600: return "\(elapsed / 60)m ago"
+        default:      return "\(elapsed / 3600)h ago"
         }
     }
 }
 
-// MARK: - Preview
-
-#Preview("Today — empty (cold start)") {
+#Preview("Today — empty") {
     TodayView()
         .environmentObject(MetricsRepository(deviceId: "preview"))
-}
-
-#Preview("Today — design gallery reference") {
-    DesignGallery()
+        .environmentObject(LiveViewModel())
 }

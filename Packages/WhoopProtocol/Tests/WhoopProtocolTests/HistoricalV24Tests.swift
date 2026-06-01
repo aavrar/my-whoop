@@ -69,6 +69,22 @@ final class HistoricalV24Tests: XCTestCase {
         XCTAssertEqual(g.unit, "g")
     }
 
+    func testRtcSkewShiftsType47Timestamps() {
+        let out = parseFrame(bytes(v24Hex))
+        let skew = 45_705_600  // +529 days: a wrong strap RTC corrected to wall time
+        let st = extractHistoricalStreams([out], deviceClockRef: 0, wallClockRef: 0, rtcSkew: skew)
+        XCTAssertEqual(st.hr, [HRSample(ts: 1700000000 + skew, bpm: 63)])
+        XCTAssertEqual(st.rr.first?.ts, 1700000000 + skew)
+        XCTAssertEqual(st.spo2.first?.ts, 1700000000 + skew)
+        XCTAssertEqual(st.gravity.first?.ts, 1700000000 + skew)
+    }
+
+    func testRtcSkewZeroIsNoOp() {
+        let out = parseFrame(bytes(v24Hex))
+        let st = extractHistoricalStreams([out], deviceClockRef: 0, wallClockRef: 0, rtcSkew: 0)
+        XCTAssertEqual(st.hr.first?.ts, 1700000000)
+    }
+
     func testUnmappedVersionFallsBackGracefully() {
         var bad = bytes(v24Hex)
         bad[5] = 99  // flip version byte to an unmapped value

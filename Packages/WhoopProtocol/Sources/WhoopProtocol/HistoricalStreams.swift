@@ -7,11 +7,21 @@ import Foundation
 /// during a historical backfill, where type-40 frames are absent.
 /// EVENT and COMMAND_RESPONSE handling is identical to extractStreams.
 /// CRC-failed and non-ok frames are skipped.
+///
+/// Two strap clocks are in play. type-43 `timestamp` is the device-epoch (since-boot) and is
+/// mapped to wall via the (deviceClockRef, wallClockRef) correlation from GET_CLOCK. type-47 `unix`
+/// and EVENT timestamps are the strap RTC (real unix); when the RTC is wrong they are corrected by
+/// `rtcSkew` (wall − strap-RTC-now, measured from GET_DATA_RANGE). rtcSkew is 0 when the RTC is good.
 public func extractHistoricalStreams(_ parsed: [ParsedFrame],
-                                     deviceClockRef: Int, wallClockRef: Int) -> Streams {
+                                     deviceClockRef: Int, wallClockRef: Int,
+                                     rtcSkew: Int = 0) -> Streams {
     func wall(_ deviceTs: Int?) -> Int? {
         guard let d = deviceTs else { return nil }
         return wallClockRef + (d - deviceClockRef)
+    }
+    func rtc(_ rtcTs: Int?) -> Int? {
+        guard let t = rtcTs else { return nil }
+        return t + rtcSkew
     }
     var out = Streams()
     for r in parsed {
@@ -19,8 +29,8 @@ public func extractHistoricalStreams(_ parsed: [ParsedFrame],
         let p = r.parsed
         switch r.typeName {
         case "HISTORICAL_DATA":
-            // type-47 carries a REAL unix timestamp + the full DSP record. No wall-clock offset.
-            guard let ts = p["unix"]?.intValue else { continue }
+            // type-47 unix is the strap RTC; rtc() applies the RTC skew (0 when the RTC is correct).
+            guard let ts = rtc(p["unix"]?.intValue) else { continue }
             if let bpm = p["heart_rate"]?.intValue, bpm != 0 {  // skip startup hr=0
                 out.hr.append(HRSample(ts: ts, bpm: bpm))
             }
@@ -49,8 +59,8 @@ public func extractHistoricalStreams(_ parsed: [ParsedFrame],
                 for rr in rrs { out.rr.append(RRInterval(ts: ts, rrMs: rr)) }
             }
         case "EVENT":
-            // EVENT timestamps are real RTC unix seconds — already wall-clock, NOT offset.
-            guard let ts = p["event_timestamp"]?.intValue else { continue }
+            // EVENT timestamps are strap RTC seconds; rtc() applies the RTC skew (0 when correct).
+            guard let ts = rtc(p["event_timestamp"]?.intValue) else { continue }
             let kind = p["event"]?.stringValue ?? ""
             if kind.hasPrefix("BATTERY_LEVEL") { appendBattery(&out, ts: ts, p: p) }  // "BATTERY_LEVEL(3)"
             var payload = p

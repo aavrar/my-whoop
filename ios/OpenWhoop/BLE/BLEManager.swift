@@ -1,5 +1,6 @@
 import Foundation
 import CoreBluetooth
+import UIKit
 import WhoopProtocol
 import WhoopStore
 
@@ -139,6 +140,9 @@ public final class BLEManager: NSObject, ObservableObject {
                                     self?.ackHistoricalChunk(trim: trim, endData: endData)
                                 },
                                 enableRawCapture: enableRawCapture)
+        let persistedSkew = RtcSkew.load()             // last good RTC error; GET_DATA_RANGE refreshes it
+        backfiller?.rtcSkew = persistedSkew
+        collector?.rtcSkew = persistedSkew
         if let cfg = AppConfig.uploaderConfig(deviceId: deviceId) {
             uploader = Uploader(config: cfg, store: store, deviceId: deviceId)
             serverSync = ServerSync(config: cfg, store: store, deviceId: deviceId)
@@ -359,7 +363,9 @@ public final class BLEManager: NSObject, ObservableObject {
         if reason == "HISTORY_COMPLETE" {
             state.lastSyncedAt = Date().timeIntervalSince1970
             UserDefaults.standard.set(state.lastSyncedAt, forKey: "lastSyncedAt")
-            Task { _ = await BackgroundCompute.run(days: 3, force: false) }
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            SyncStatusNotifier.post()
+            Task { _ = await BackgroundCompute.run(days: 3, force: true) }
         }
         checkStrapLiveness()         // safety-net: strap ahead of us AND our frontier frozen ⇒ stuck?
     }
@@ -801,6 +807,19 @@ extension BLEManager: CBPeripheralDelegate {
                 if frame.count > 6, frame[6] == WhoopCommand.getDataRange.rawValue,
                    let newest = BLEManager.dataRangeNewestUnix(from: frame) {
                     strapNewestTs = newest                        // feeds the liveness watchdog
+                    // The strap's newest record is RTC real-unix ≈ "RTC now" while it is recording.
+                    // wall − that = the RTC error applied to type-47/EVENT timestamps at ingest.
+                    if let skew = RtcSkew.measure(strapNewestRTC: newest, wall: Int(Date().timeIntervalSince1970)) {
+                        RtcSkew.save(skew)
+                        backfiller?.rtcSkew = skew
+                        collector?.rtcSkew = skew
+                        let skewDays = skew / 86_400
+                        if abs(skewDays) >= 1 {
+                            log("Strap RTC is \(skewDays)d off — correcting type-47/event timestamps in software")
+                        }
+                    }
+                    let fmt = DateFormatter(); fmt.dateFormat = "MMM d HH:mm"
+                    log("Strap newest type-47 record (raw RTC): \(fmt.string(from: Date(timeIntervalSince1970: TimeInterval(newest))))")
                 }
                 // Clock correlation runs in both live and backfill modes. Once established it
                 // unblocks both the Collector (live path) and the Backfiller (chunk decoding).

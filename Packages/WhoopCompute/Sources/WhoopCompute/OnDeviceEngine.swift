@@ -41,7 +41,8 @@ public actor OnDeviceEngine {
 
         // Use the latest HR timestamp as the reference date so the engine works
         // even when the band's internal clock is behind wall-clock time (common on first
-        // pair — historical frames carry device-epoch timestamps, not wall-clock).
+        // pair — historical frames carry device-epoch timestamps, not wall-clock). Anchoring
+        // to wall-clock instead makes the compute window miss the days where data actually lives.
         let latestHRTs = (try? await store.latestHRSampleTs(deviceId: deviceId)) ?? Int(Date().timeIntervalSince1970)
         let now = Date(timeIntervalSince1970: TimeInterval(latestHRTs))
         let fmt = DateFormatter()
@@ -49,7 +50,14 @@ public actor OnDeviceEngine {
         fmt.timeZone = tz
         fmt.dateFormat = "yyyy-MM-dd"
 
-        var baselines = await loadBaselines()
+        // A forced reprocess rebuilds baselines deterministically: seed from the daily history
+        // strictly before the recompute window, then fold each window day exactly once below.
+        // Without this, repeated force runs re-fold the same days into the persisted rolling
+        // baseline and the recovery score drifts on every tap of "Process Sleep Data".
+        let windowStartDay: String? = force
+            ? (calUTC.date(byAdding: .day, value: -(days - 1), to: now)).map { fmt.string(from: $0) }
+            : nil
+        var baselines = await loadBaselines(rebuildBefore: windowStartDay)
 
         for offset in stride(from: days - 1, through: 0, by: -1) {
             guard let day = calUTC.date(byAdding: .day, value: -offset, to: now) else { continue }
@@ -245,19 +253,26 @@ public actor OnDeviceEngine {
 
     // MARK: - Baseline I/O
 
-    private func loadBaselines() async -> [String: BaselineState] {
-        guard let stored = try? await store.readBaselines(deviceId: deviceId) else { return [:] }
+    private func loadBaselines(rebuildBefore cutoffDay: String? = nil) async -> [String: BaselineState] {
         var result: [String: BaselineState] = [:]
-        for b in stored {
-            result[b.metric] = BaselineState(
-                baseline: b.baseline, spread: b.spread,
-                nValid: b.nValid, lastUpdatedTs: b.lastUpdatedTs
-            )
+
+        // Incremental runs reuse the persisted rolling state. A forced rebuild (cutoffDay set)
+        // ignores it and refolds from the daily history below, for a deterministic result.
+        if cutoffDay == nil, let stored = try? await store.readBaselines(deviceId: deviceId) {
+            for b in stored {
+                result[b.metric] = BaselineState(
+                    baseline: b.baseline, spread: b.spread,
+                    nValid: b.nValid, lastUpdatedTs: b.lastUpdatedTs
+                )
+            }
         }
 
         if result.isEmpty {
-            // Fold history from dailyMetrics cache if available (e.g. from imported physiological_cycles.csv)
-            if let historical = try? await store.dailyMetrics(deviceId: deviceId, from: "1970-01-01", to: "2100-01-01"),
+            // Fold history from dailyMetrics cache if available (e.g. from imported physiological_cycles.csv).
+            // On a rebuild, fold only days strictly before the recompute window so the window days
+            // (re-folded fresh in the compute loop) are not counted twice.
+            if let allHistory = try? await store.dailyMetrics(deviceId: deviceId, from: "1970-01-01", to: "2100-01-01"),
+               case let historical = allHistory.filter({ cutoffDay == nil || $0.day < cutoffDay! }),
                !historical.isEmpty {
                 var hrvVals: [(value: Double, ts: Int)] = []
                 var rhrVals: [(value: Double, ts: Int)] = []

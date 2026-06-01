@@ -32,7 +32,7 @@ extension WhoopStore: BackfillStoreWriting {}
 /// (.withResponse) is link-layer confirmed. Never waits on the server.
 @MainActor
 final class Backfiller {
-    typealias Extractor = ([ParsedFrame], Int, Int) -> Streams
+    typealias Extractor = ([ParsedFrame], Int, Int, Int) -> Streams
 
     private let store: BackfillStoreWriting
     private let deviceId: String
@@ -49,6 +49,10 @@ final class Backfiller {
     /// The clock reference set by BLEManager when GET_CLOCK confirms (required for decoding).
     var clockRef: ClockRef?
 
+    /// Strap-RTC error (wall − RTC) applied to type-47 + EVENT timestamps. Set by BLEManager from
+    /// GET_DATA_RANGE; 0 when the RTC is accurate. Separate from clockRef (a device-epoch map).
+    var rtcSkew: Int = 0
+
     /// True while a historical offload session is active.
     private(set) var isBackfilling = false
 
@@ -61,7 +65,7 @@ final class Backfiller {
          deviceId: String,
          ackTrim: @escaping (_ trim: UInt32, _ endData: [UInt8]) -> Void,
          enableRawCapture: Bool = false,
-         extract: @escaping Extractor = { extractHistoricalStreams($0, deviceClockRef: $1, wallClockRef: $2) }) {
+         extract: @escaping Extractor = { extractHistoricalStreams($0, deviceClockRef: $1, wallClockRef: $2, rtcSkew: $3) }) {
         self.store = store
         self.deviceId = deviceId
         self.ackTrim = ackTrim
@@ -130,7 +134,7 @@ final class Backfiller {
             // truly required to map REALTIME (type-40/43) device-epoch timestamps, never in a hist chunk.
             let ref = clockRef ?? { let now = Int(Date().timeIntervalSince1970); return ClockRef(device: now, wall: now) }()
             let parsed = frames.map { parseFrame($0) }
-            let decoded = extract(parsed, ref.device, ref.wall)
+            let decoded = extract(parsed, ref.device, ref.wall, rtcSkew)
             do { try await store.insert(decoded, deviceId: deviceId) } catch { return }
 
             // RAW: only persisted when the research toggle is ON. Default OFF → decoded-only; the

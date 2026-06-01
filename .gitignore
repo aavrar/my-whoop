@@ -15,6 +15,9 @@ re_log.jsonl
 control.txt
 phase.txt
 
+# Personal WHOOP data exports — kept LOCAL, never published.
+my_whoop_data_*/
+
 # Personal biometric captures — kept LOCAL, never published.
 # (The small derived parity fixtures in Packages/.../Tests/.../Resources ARE committed.)
 capture.jsonl

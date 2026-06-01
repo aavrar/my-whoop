@@ -14,7 +14,7 @@ enum BackfillTrigger {
 /// (observed: ~15-min periodic + expedited event syncs).
 enum BackfillPolicy {
     static let periodicFloorSeconds: TimeInterval = 900   // 15 min
-    static let eventFloorSeconds: TimeInterval = 90       // absorbs reconnect-flaps / event bursts
+    static let eventFloorSeconds: TimeInterval = 30       // absorbs reconnect-flaps / event bursts
 
     static func shouldRun(trigger: BackfillTrigger, now: TimeInterval,
                           lastBackfillAt: TimeInterval?) -> Bool {

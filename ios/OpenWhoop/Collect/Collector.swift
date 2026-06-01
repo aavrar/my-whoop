@@ -62,6 +62,9 @@ final class Collector {
 
     /// Set once the GET_CLOCK correlation lands (E1). Until then, frames buffer un-persisted.
     var clockRef: ClockRef?
+    /// Strap-RTC error (wall − RTC) applied to EVENT timestamps (real-unix RTC). Set by BLEManager
+    /// from GET_DATA_RANGE; 0 when the RTC is accurate. Realtime HR/RR use the device-epoch clockRef.
+    var rtcSkew: Int = 0
     /// On-demand bounded raw-capture window. ORs into the raw-persist gate so a "capture
     /// activity sample" action can persist raw even when `enableRawCapture` is off. The window's
     /// monotonic deadline auto-expires so a missed stop callback can't leak raw forever.
@@ -131,7 +134,7 @@ final class Collector {
         buffer.removeAll(keepingCapacity: true)
 
         let parsed = frames.map { parseFrame($0) }
-        let streams = extractStreams(parsed, deviceClockRef: ref.device, wallClockRef: ref.wall)
+        let streams = extractStreams(parsed, deviceClockRef: ref.device, wallClockRef: ref.wall, rtcSkew: rtcSkew)
         do {
             try await store.insert(streams, deviceId: deviceId)   // DECODED FIRST (durable)
         } catch {

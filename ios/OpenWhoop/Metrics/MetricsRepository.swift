@@ -204,6 +204,28 @@ final class MetricsRepository: ObservableObject {
         return (try? await store.sleepSessions(deviceId: deviceId, from: from, to: to, limit: limit)) ?? []
     }
 
+    // MARK: - Historical day lookup (Today tab day browsing)
+
+    /// Returns the DailyMetric and the sleep session whose endTs falls on `day` (YYYY-MM-DD UTC).
+    func metricsForDay(_ day: String) async -> (daily: DailyMetric?, session: CachedSleepSession?) {
+        await ensureOpen()
+        guard let store else { return (nil, nil) }
+        let daily = (try? await store.dailyMetrics(deviceId: deviceId, from: day, to: day))?.first
+        let fmt = DateFormatter()
+        fmt.calendar = Calendar(identifier: .gregorian)
+        fmt.timeZone = TimeZone(identifier: "UTC")
+        fmt.dateFormat = "yyyy-MM-dd"
+        guard let date = fmt.date(from: day) else { return (daily, nil) }
+        let dayStart = Int(date.timeIntervalSince1970)
+        // Query a window: sleep that ended this day could have started the previous evening.
+        let sessions = (try? await store.sleepSessions(deviceId: deviceId,
+                                                        from: dayStart - 43200,
+                                                        to: dayStart + 86400,
+                                                        limit: 5)) ?? []
+        let session = sessions.first { fmt.string(from: Date(timeIntervalSince1970: TimeInterval($0.endTs))) == day }
+        return (daily, session)
+    }
+
     // MARK: - Profile (M0.5)
 
     /// Best-effort GET /v1/profile. Returns nil when unconfigured or on error.

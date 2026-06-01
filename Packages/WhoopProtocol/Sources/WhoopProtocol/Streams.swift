@@ -129,7 +129,8 @@ private func toWall(_ deviceTs: Int?, _ deviceClockRef: Int, _ wallClockRef: Int
 /// carries an HR byte but streams alongside type-40 during raw collection, so routing both
 /// would double-count HR for the same instants. CRC-failed and non-ok frames are skipped.
 public func extractStreams(_ parsed: [ParsedFrame],
-                           deviceClockRef: Int, wallClockRef: Int) -> Streams {
+                           deviceClockRef: Int, wallClockRef: Int,
+                           rtcSkew: Int = 0) -> Streams {
     var out = Streams()
     for r in parsed {
         if !r.ok || r.crcOK == false { continue }
@@ -145,8 +146,9 @@ public func extractStreams(_ parsed: [ParsedFrame],
                 for rr in rrs { out.rr.append(RRInterval(ts: ts, rrMs: rr)) }
             }
         case "EVENT":
-            // EVENT timestamps are real RTC unix seconds — already wall-clock, NOT offset.
-            guard let ts = p["event_timestamp"]?.intValue else { continue }
+            // EVENT timestamps are strap RTC seconds; add the RTC skew (0 when the RTC is correct).
+            guard let raw = p["event_timestamp"]?.intValue else { continue }
+            let ts = raw + rtcSkew
             let kind = p["event"]?.stringValue ?? ""
             // BATTERY_LEVEL events (every ~8 min) carry SoC/mV/charging + a real RTC ts →
             // the DENSE battery series (the post-hook decoded the fields).

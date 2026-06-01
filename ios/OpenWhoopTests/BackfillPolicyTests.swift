@@ -12,10 +12,10 @@ final class BackfillPolicyTests: XCTestCase {
         XCTAssertTrue(BackfillPolicy.shouldRun(trigger: .periodic, now: 1000, lastBackfillAt: 100))  // 900s
     }
     func testEventFloor() {
-        XCTAssertFalse(BackfillPolicy.shouldRun(trigger: .connect, now: 1000, lastBackfillAt: 950))    // 50s
-        XCTAssertTrue(BackfillPolicy.shouldRun(trigger: .connect, now: 1000, lastBackfillAt: 910))     // 90s
-        XCTAssertFalse(BackfillPolicy.shouldRun(trigger: .strap, now: 1000, lastBackfillAt: 950))      // 50s
-        XCTAssertTrue(BackfillPolicy.shouldRun(trigger: .strap, now: 1000, lastBackfillAt: 905))       // 95s
+        XCTAssertFalse(BackfillPolicy.shouldRun(trigger: .connect, now: 1000, lastBackfillAt: 980))    // 20s
+        XCTAssertTrue(BackfillPolicy.shouldRun(trigger: .connect, now: 1000, lastBackfillAt: 960))     // 40s
+        XCTAssertFalse(BackfillPolicy.shouldRun(trigger: .strap, now: 1000, lastBackfillAt: 980))      // 20s
+        XCTAssertTrue(BackfillPolicy.shouldRun(trigger: .strap, now: 1000, lastBackfillAt: 960))       // 40s
     }
     func testManualAlwaysRuns() {
         XCTAssertTrue(BackfillPolicy.shouldRun(trigger: .manual, now: 1000, lastBackfillAt: 999))
