@@ -107,7 +107,7 @@ final class MetricsRepository: ObservableObject {
         guard let day = today?.day else { return Date() }
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd"
-        fmt.timeZone = TimeZone(identifier: "UTC")
+        fmt.timeZone = TimeZone.current
         return fmt.date(from: day) ?? Date()
     }
 
@@ -130,6 +130,15 @@ final class MetricsRepository: ObservableObject {
             let engine = OnDeviceEngine(store: store, deviceId: deviceId)
             await engine.computeRecent(days: 14, force: true)
         }
+
+        // Clear phantom future daily rows left by the obsolete clock-shift correction so the Today
+        // tab never anchors to a blank far-future day. Cutoff is a small slop past local today.
+        let cutoffFmt = DateFormatter()
+        cutoffFmt.calendar = Calendar(identifier: .gregorian)
+        cutoffFmt.timeZone = .current
+        cutoffFmt.dateFormat = "yyyy-MM-dd"
+        let cutoffDay = cutoffFmt.string(from: Date().addingTimeInterval(2 * 86400))
+        try? await store.deleteDailyMetricsAfter(deviceId: deviceId, day: cutoffDay)
 
         // Use the most-recent metric regardless of wall-clock date. This handles the common
         // case where the band's RTC is behind wall time (e.g. long gap since last official sync).
@@ -177,7 +186,7 @@ final class MetricsRepository: ObservableObject {
             let cal = Calendar(identifier: .gregorian)
             let fmt = DateFormatter()
             fmt.calendar = cal
-            fmt.timeZone = TimeZone(identifier: "UTC")
+            fmt.timeZone = TimeZone.current
             fmt.dateFormat = "yyyy-MM-dd"
             let ref = dataReferenceDate
             let fromDay = fmt.string(from: cal.date(byAdding: .day, value: -7, to: ref) ?? ref)
@@ -219,7 +228,7 @@ final class MetricsRepository: ObservableObject {
         let daily = (try? await store.dailyMetrics(deviceId: deviceId, from: day, to: day))?.first
         let fmt = DateFormatter()
         fmt.calendar = Calendar(identifier: .gregorian)
-        fmt.timeZone = TimeZone(identifier: "UTC")
+        fmt.timeZone = TimeZone.current
         fmt.dateFormat = "yyyy-MM-dd"
         guard let date = fmt.date(from: day) else { return (daily, nil) }
         let dayStart = Int(date.timeIntervalSince1970)
@@ -264,7 +273,7 @@ final class MetricsRepository: ObservableObject {
         // Derive the YYYY-MM-DD day that the session's endTs falls on (UTC).
         let fmt = DateFormatter()
         fmt.calendar = Calendar(identifier: .gregorian)
-        fmt.timeZone = TimeZone(identifier: "UTC")
+        fmt.timeZone = TimeZone.current
         fmt.dateFormat = "yyyy-MM-dd"
         let endDate = Date(timeIntervalSince1970: TimeInterval(session.endTs))
         let day = fmt.string(from: endDate)

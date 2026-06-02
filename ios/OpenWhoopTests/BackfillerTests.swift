@@ -103,7 +103,7 @@ final class BackfillerTests: XCTestCase {
         let bf = Backfiller(store: store, deviceId: "whoop-test",
                             ackTrim: { v, e in acks.append(v); ackEndData.append(e) },
                             enableRawCapture: true,
-                            extract: { _, _, _ in Streams() })
+                            extract: { _, _, _, _ in Streams() })
         bf.clockRef = defaultRef()
         bf.begin()
 
@@ -134,7 +134,7 @@ final class BackfillerTests: XCTestCase {
         var captured: [UInt8] = []
         let bf = Backfiller(store: store, deviceId: "whoop-test",
                             ackTrim: { _, e in captured = e },
-                            extract: { _, _, _ in Streams() })
+                            extract: { _, _, _, _ in Streams() })
         bf.clockRef = defaultRef()
         bf.begin()
 
@@ -160,7 +160,7 @@ final class BackfillerTests: XCTestCase {
         let d2 = dataFrame()
         let bf = Backfiller(store: store, deviceId: "whoop-test",
                             ackTrim: { v, _ in acks.append(v) },
-                            extract: { frames, _, _ in
+                            extract: { frames, _, _, _ in
                                 capturedFrames = frames.map { _ in [] } // just count
                                 return Streams()
                             })
@@ -182,7 +182,7 @@ final class BackfillerTests: XCTestCase {
         var acks: [UInt32] = []
         let bf = Backfiller(store: store, deviceId: "whoop-test",
                             ackTrim: { v, _ in acks.append(v) },
-                            extract: { _, _, _ in Streams() })
+                            extract: { _, _, _, _ in Streams() })
         bf.clockRef = defaultRef()
         bf.begin()
         await bf.ingest(metaFrame(1))
@@ -202,7 +202,7 @@ final class BackfillerTests: XCTestCase {
         let bf = Backfiller(store: store, deviceId: "whoop-test",
                             ackTrim: { v, _ in acks.append(v) },
                             enableRawCapture: true,
-                            extract: { _, _, _ in Streams() })
+                            extract: { _, _, _, _ in Streams() })
         bf.clockRef = defaultRef()
         bf.begin()
         await bf.ingest(metaFrame(1))
@@ -223,7 +223,7 @@ final class BackfillerTests: XCTestCase {
         let bf = Backfiller(store: store, deviceId: "whoop-test",
                             ackTrim: { v, _ in acks.append(v) },
                             enableRawCapture: true,
-                            extract: { _, _, _ in Streams() })
+                            extract: { _, _, _, _ in Streams() })
         bf.clockRef = defaultRef()
         bf.begin()
         await bf.ingest(metaFrame(1))
@@ -243,7 +243,7 @@ final class BackfillerTests: XCTestCase {
         var acks: [UInt32] = []
         let bf = Backfiller(store: store, deviceId: "whoop-test",
                             ackTrim: { v, _ in acks.append(v) },
-                            extract: { _, _, _ in Streams() })
+                            extract: { _, _, _, _ in Streams() })
         bf.clockRef = defaultRef()
         bf.begin()
 
@@ -275,7 +275,7 @@ final class BackfillerTests: XCTestCase {
         var acks: [UInt32] = []
         let bf = Backfiller(store: store, deviceId: "whoop-test",
                             ackTrim: { v, _ in acks.append(v) },
-                            extract: { _, _, _ in Streams() })
+                            extract: { _, _, _, _ in Streams() })
         bf.clockRef = defaultRef()
         bf.begin()
         await bf.ingest(metaFrame(1))
@@ -296,7 +296,7 @@ final class BackfillerTests: XCTestCase {
         var acks: [UInt32] = []
         let bf = Backfiller(store: store, deviceId: "whoop-test",
                             ackTrim: { v, _ in acks.append(v) },
-                            extract: { _, _, _ in Streams() })
+                            extract: { _, _, _, _ in Streams() })
         bf.clockRef = defaultRef()
         bf.begin()
 
@@ -321,7 +321,7 @@ final class BackfillerTests: XCTestCase {
         var acks: [UInt32] = []
         let bf = Backfiller(store: store, deviceId: "whoop-test",
                             ackTrim: { v, _ in acks.append(v) },
-                            extract: { _, _, _ in Streams() })
+                            extract: { _, _, _, _ in Streams() })
         bf.clockRef = defaultRef()
         bf.begin()
 
@@ -344,7 +344,7 @@ final class BackfillerTests: XCTestCase {
         var acks: [UInt32] = []
         let bf = Backfiller(store: store, deviceId: "whoop-test",
                             ackTrim: { v, _ in acks.append(v) },
-                            extract: { _, _, _ in Streams() })
+                            extract: { _, _, _, _ in Streams() })
         bf.clockRef = defaultRef()
         bf.begin()
         await bf.ingest(endFrame(unix: 1_700_001_000, trim: 42))   // END with no preceding data
@@ -365,7 +365,7 @@ final class BackfillerTests: XCTestCase {
         var acks: [UInt32] = []
         let bf = Backfiller(store: store, deviceId: "whoop-test",
                             ackTrim: { v, _ in acks.append(v) },
-                            extract: { _, _, _ in Streams() })
+                            extract: { _, _, _, _ in Streams() })
         // Do NOT set bf.clockRef → exercises the identity-fallback path.
         bf.begin()
 
@@ -386,7 +386,7 @@ final class BackfillerTests: XCTestCase {
         var acks: [UInt32] = []
         let bf = Backfiller(store: store, deviceId: "whoop-test",
                             ackTrim: { v, _ in acks.append(v) },
-                            extract: { _, _, _ in Streams() })
+                            extract: { _, _, _, _ in Streams() })
         XCTAssertFalse(bf.isBackfilling, "starts idle")
         bf.begin()
         XCTAssertTrue(bf.isBackfilling, "true after begin()")
@@ -397,7 +397,7 @@ final class BackfillerTests: XCTestCase {
         var acks: [UInt32] = []
         let bf = Backfiller(store: store, deviceId: "whoop-test",
                             ackTrim: { v, _ in acks.append(v) },
-                            extract: { _, _, _ in Streams() })
+                            extract: { _, _, _, _ in Streams() })
         bf.clockRef = defaultRef()
         bf.begin()
         await bf.ingest(metaFrame(3)) // HISTORY_COMPLETE
@@ -412,7 +412,7 @@ final class BackfillerTests: XCTestCase {
         // No enableRawCapture passed → defaults OFF.
         let bf = Backfiller(store: store, deviceId: "whoop-test",
                             ackTrim: { v, _ in acks.append(v) },
-                            extract: { _, _, _ in Streams() })
+                            extract: { _, _, _, _ in Streams() })
         bf.clockRef = defaultRef()
         bf.begin()
         await bf.ingest(metaFrame(1))
@@ -433,7 +433,7 @@ final class BackfillerTests: XCTestCase {
         let bf = Backfiller(store: store, deviceId: "whoop-test",
                             ackTrim: { v, _ in acks.append(v) },
                             enableRawCapture: true,
-                            extract: { _, _, _ in Streams() })
+                            extract: { _, _, _, _ in Streams() })
         bf.clockRef = defaultRef()
         bf.begin()
         await bf.ingest(metaFrame(1))
@@ -453,7 +453,7 @@ final class BackfillerTests: XCTestCase {
         var acks: [UInt32] = []
         let bf = Backfiller(store: store, deviceId: "whoop-test",
                             ackTrim: { v, _ in acks.append(v) },
-                            extract: { _, _, _ in Streams() })
+                            extract: { _, _, _, _ in Streams() })
         bf.begin()
         bf.timeoutFired()
         XCTAssertFalse(bf.isBackfilling, "false after timeout")
@@ -480,7 +480,7 @@ final class BackfillerTests: XCTestCase {
         var acks1: [UInt32] = []
         let bf1 = Backfiller(store: store, deviceId: "whoop-test",
                              ackTrim: { v, _ in acks1.append(v) },
-                             extract: { _, _, _ in Streams() })
+                             extract: { _, _, _, _ in Streams() })
         bf1.clockRef = defaultRef()
         bf1.begin()
         await bf1.ingest(metaFrame(1))                                   // START
@@ -500,7 +500,7 @@ final class BackfillerTests: XCTestCase {
         var acks2: [UInt32] = []
         let bf2 = Backfiller(store: store, deviceId: "whoop-test",
                              ackTrim: { v, _ in acks2.append(v) },
-                             extract: { _, _, _ in Streams() })
+                             extract: { _, _, _, _ in Streams() })
         bf2.clockRef = defaultRef()
         let cursorAtReconnect = try await store.cursor("strap_trim")
         XCTAssertEqual(cursorAtReconnect, 10, "cursor still 10 at reconnect — not reset to 0")

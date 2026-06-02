@@ -15,14 +15,16 @@ public struct EngineProfile {
 public actor OnDeviceEngine {
     private let store: WhoopStore
     private let deviceId: String
+    private let timeZone: TimeZone
     private var profile: EngineProfile = EngineProfile()
 
     static let lookbackDays = 30
     static let streamLimitPerDay = 200_000
 
-    public init(store: WhoopStore, deviceId: String) {
+    public init(store: WhoopStore, deviceId: String, timeZone: TimeZone = .current) {
         self.store = store
         self.deviceId = deviceId
+        self.timeZone = timeZone
     }
 
     public func setProfile(_ p: EngineProfile) {
@@ -34,10 +36,8 @@ public actor OnDeviceEngine {
     /// Compute metrics for the last `days` calendar days and upsert into WhoopStore.
     /// Skips days already populated (daily row exists with non-nil recovery), unless `force` is true.
     public func computeRecent(days: Int = 7, force: Bool = false) async {
-        let cal = Calendar(identifier: .gregorian)
-        let tz  = TimeZone(identifier: "UTC")!
-        var calUTC = cal
-        calUTC.timeZone = tz
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = timeZone
 
         // Use the latest HR timestamp as the reference date so the engine works
         // even when the band's internal clock is behind wall-clock time (common on first
@@ -46,8 +46,8 @@ public actor OnDeviceEngine {
         let latestHRTs = (try? await store.latestHRSampleTs(deviceId: deviceId)) ?? Int(Date().timeIntervalSince1970)
         let now = Date(timeIntervalSince1970: TimeInterval(latestHRTs))
         let fmt = DateFormatter()
-        fmt.calendar = calUTC
-        fmt.timeZone = tz
+        fmt.calendar = cal
+        fmt.timeZone = timeZone
         fmt.dateFormat = "yyyy-MM-dd"
 
         // A forced reprocess rebuilds baselines deterministically: seed from the daily history
@@ -55,12 +55,12 @@ public actor OnDeviceEngine {
         // Without this, repeated force runs re-fold the same days into the persisted rolling
         // baseline and the recovery score drifts on every tap of "Process Sleep Data".
         let windowStartDay: String? = force
-            ? (calUTC.date(byAdding: .day, value: -(days - 1), to: now)).map { fmt.string(from: $0) }
+            ? (cal.date(byAdding: .day, value: -(days - 1), to: now)).map { fmt.string(from: $0) }
             : nil
         var baselines = await loadBaselines(rebuildBefore: windowStartDay)
 
         for offset in stride(from: days - 1, through: 0, by: -1) {
-            guard let day = calUTC.date(byAdding: .day, value: -offset, to: now) else { continue }
+            guard let day = cal.date(byAdding: .day, value: -offset, to: now) else { continue }
             let dayStr = fmt.string(from: day)
 
             if !force,
@@ -69,21 +69,24 @@ public actor OnDeviceEngine {
                 continue
             }
 
-            await computeDay(dayStr: dayStr, cal: calUTC, fmt: fmt, baselines: &baselines)
+            await computeDay(dayStr: dayStr, cal: cal, fmt: fmt, baselines: &baselines)
         }
     }
 
     // MARK: - Per-day computation
 
     private func computeDay(dayStr: String, cal: Calendar, fmt: DateFormatter, baselines: inout [String: BaselineState]) async {
-        guard let dayDate = fmt.date(from: dayStr) else { return }
+        guard let win = EngineDay.window(dayStr: dayStr, calendar: cal) else { return }
+        let dayStart = win.dayStart
+        let dayEnd   = win.dayEnd
+        let searchStart = win.searchStart
+        // Load through the END of the local day so strain sees the full day's HR (afternoon and
+        // evening), not just the pre-afternoon slice the old `dayDate + 14h` cap allowed.
+        let searchEnd = dayEnd
 
-        let sleepSearchStart = Int(dayDate.addingTimeInterval(-14 * 3600).timeIntervalSince1970)
-        let sleepSearchEnd   = Int(dayDate.addingTimeInterval(14 * 3600).timeIntervalSince1970)
-
-        guard let grav = try? await store.gravitySamples(deviceId: deviceId, from: sleepSearchStart, to: sleepSearchEnd, limit: Self.streamLimitPerDay),
-              let hr   = try? await store.hrSamples(deviceId: deviceId, from: sleepSearchStart - 86400, to: sleepSearchEnd, limit: Self.streamLimitPerDay),
-              let rr   = try? await store.rrIntervals(deviceId: deviceId, from: sleepSearchStart, to: sleepSearchEnd, limit: Self.streamLimitPerDay)
+        guard let grav = try? await store.gravitySamples(deviceId: deviceId, from: searchStart, to: searchEnd, limit: Self.streamLimitPerDay),
+              let hr   = try? await store.hrSamples(deviceId: deviceId, from: searchStart - 86400, to: searchEnd, limit: Self.streamLimitPerDay),
+              let rr   = try? await store.rrIntervals(deviceId: deviceId, from: searchStart, to: searchEnd, limit: Self.streamLimitPerDay)
         else { return }
 
         let gravityInput: [SleepDetection.GravitySample] = grav.map {
@@ -94,25 +97,26 @@ public actor OnDeviceEngine {
 
         // Manual override: find any session the user edited for this day.
         let overrideSession: CachedSleepSession? = (try? await store.sleepSessions(
-            deviceId: deviceId, from: sleepSearchStart, to: sleepSearchEnd, limit: 10))?
-            .first(where: { $0.isManualOverride })
+            deviceId: deviceId, from: searchStart, to: searchEnd, limit: 10))?
+            .first(where: { $0.isManualOverride && $0.endTs >= dayStart && $0.endTs < dayEnd })
 
-        // Determine sleep runs: override window or auto-detected.
-        let rawRuns: [(start: Int, end: Int)]
+        // Determine sleep runs: override window or auto-detected, then attribute each to the single
+        // local day it ends on so one night is never claimed by two adjacent days.
+        let detectedRuns: [(start: Int, end: Int)]
         if let s = overrideSession {
-            rawRuns = [(s.startTs, s.endTs)]
+            detectedRuns = [(s.startTs, s.endTs)]
         } else {
-            rawRuns = SleepDetection.detect(gravity: gravityInput, hr: hrInput)
+            detectedRuns = SleepDetection.detect(gravity: gravityInput, hr: hrInput)
         }
+        let rawRuns = EngineDay.runsEndingInDay(detectedRuns, dayStart: dayStart, dayEnd: dayEnd)
 
         // Group runs within 30 min of each other, pick the group with the most sleep time.
         let groups = groupRuns(rawRuns, maxGapSec: 1800)
         guard let bestGroup = groups.max(by: {
             $0.reduce(0) { $0 + $1.end - $1.start } < $1.reduce(0) { $0 + $1.end - $1.start }
         }) else {
-            let dayStart = Int(dayDate.timeIntervalSince1970)
-            let dayEnd   = Int(dayDate.addingTimeInterval(86400).timeIntervalSince1970)
-            let strainHR = hrInput.filter { $0.ts >= dayStart && $0.ts <= dayEnd }
+            let strainHR = hrInput.filter { $0.ts >= dayStart && $0.ts < dayEnd }
+            await consolidateSessions(keepStartTs: nil, dayStart: dayStart, dayEnd: dayEnd)
             let rhr = baselines[BaselineMetric.restingHr.rawValue].map { Int($0.baseline) } ?? 55
             let strain = Strain.compute(hr: strainHR, restingHr: rhr, age: profile.age, sex: profile.sex)
             let needMin = SleepNeed.need(strain: strain, recovery: nil)
@@ -171,19 +175,22 @@ public actor OnDeviceEngine {
         if let hrv = avgHRV, let rhr = resting,
            let hrvBase = baselines[BaselineMetric.hrv.rawValue],
            let rhrBase = baselines[BaselineMetric.restingHr.rawValue] {
+            // Sleep-vs-need uses the baseline need (recovery isn't known yet here, and need depends
+            // on recovery — break the cycle with the strain/recovery-independent baseline).
+            let baselineNeed = SleepNeed.need(strain: nil, recovery: nil)
             let inputs = Recovery.Inputs(
                 hrv: hrv, restingHr: Double(rhr),
-                sleepEfficiency: session.efficiency, resp: nil
+                sleepEfficiency: session.efficiency,
+                sleepPerformance: baselineNeed > 0 ? Double(sleepMinutes) / baselineNeed : nil,
+                resp: nil
             )
             recovery = Recovery.score(inputs: inputs, hrv: hrvBase, restingHr: rhrBase, resp: nil)
         } else {
             recovery = nil
         }
 
-        let dayStart = Int(dayDate.timeIntervalSince1970)
-        let dayEnd   = Int(dayDate.addingTimeInterval(86400).timeIntervalSince1970)
         let rhrForStrain = resting ?? Int(baselines[BaselineMetric.restingHr.rawValue]?.baseline ?? 55)
-        let strainHR = hrInput.filter { $0.ts >= dayStart && $0.ts <= dayEnd }
+        let strainHR = hrInput.filter { $0.ts >= dayStart && $0.ts < dayEnd }
         let strain = Strain.compute(hr: strainHR, restingHr: rhrForStrain, age: profile.age, sex: profile.sex)
 
         let respSamples = (try? await store.respSamples(deviceId: deviceId, from: sleepRun.start, to: sleepRun.end, limit: Self.streamLimitPerDay)) ?? []
@@ -229,6 +236,7 @@ public actor OnDeviceEngine {
             isManualOverride: overrideSession != nil   // preserve the flag
         )
         try? await store.upsertSleepSessions([cachedSession], deviceId: deviceId)
+        await consolidateSessions(keepStartTs: cachedSession.startTs, dayStart: dayStart, dayEnd: dayEnd)
 
         let metric = DailyMetric(
             day: dayStr,
@@ -367,6 +375,20 @@ public actor OnDeviceEngine {
     private func decodeStages(_ json: String) -> [StageSegment]? {
         guard let data = json.data(using: .utf8) else { return nil }
         return try? JSONDecoder().decode([StageSegment].self, from: data)
+    }
+
+    /// Enforce one session per wake-day. After writing the chosen session, remove other sessions
+    /// that also end within this local day (stale auto-detects or superseded duplicate edits).
+    /// When `keepStartTs` is nil (no sleep found for the day) only auto sessions are removed —
+    /// a manual override is never silently discarded.
+    private func consolidateSessions(keepStartTs: Int?, dayStart: Int, dayEnd: Int) async {
+        let existing = (try? await store.sleepSessions(
+            deviceId: deviceId,
+            from: dayStart - EngineDay.searchLookbackSeconds, to: dayEnd, limit: 50)) ?? []
+        for s in existing where s.endTs >= dayStart && s.endTs < dayEnd && s.startTs != keepStartTs {
+            if keepStartTs == nil && s.isManualOverride { continue }
+            try? await store.deleteSleepSession(deviceId: deviceId, startTs: s.startTs)
+        }
     }
 
     // Group sleep runs where consecutive runs are within maxGapSec of each other.

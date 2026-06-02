@@ -84,6 +84,8 @@ public final class LiveViewModel: ObservableObject {
     public func enterForeground() { ble.requestSync(.foreground) }
     /// User tapped "Sync now" — force an offload regardless of the periodic floor.
     public func syncNow() { ble.requestSync(.manual) }
+    /// User tapped "Recover" — un-wedge a stuck offload (exit high-freq, re-latch clock, resync).
+    public func recoverSync() { ble.forceRecover() }
 
     /// Refresh the storage summary line from the store (polled every few seconds by LiveView).
     public func refreshStorage() {

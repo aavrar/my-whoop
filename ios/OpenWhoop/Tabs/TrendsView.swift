@@ -94,7 +94,7 @@ struct TrendsView: View {
 
     private func dayRange(for range: Range) -> (String, String) {
         let cal = Calendar(identifier: .gregorian)
-        let utc = TimeZone(identifier: "UTC")!
+        let utc = TimeZone.current
         let fmt = DateFormatter()
         fmt.calendar = cal
         fmt.timeZone = utc
@@ -117,7 +117,7 @@ struct TrendsView: View {
     private func isoDate(_ day: String) -> Date? {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd"
-        fmt.timeZone = TimeZone(identifier: "UTC")
+        fmt.timeZone = TimeZone.current
         return fmt.date(from: day)
     }
 
@@ -413,7 +413,7 @@ struct TrendsView: View {
     private func formatDay(_ day: String) -> String {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd"
-        fmt.timeZone = TimeZone(identifier: "UTC")
+        fmt.timeZone = TimeZone.current
         guard let date = fmt.date(from: day) else { return day }
         let out = DateFormatter()
         out.dateFormat = "EEE M/d"

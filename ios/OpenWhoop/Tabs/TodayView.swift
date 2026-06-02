@@ -18,7 +18,7 @@ struct TodayView: View {
     private var shownSession: CachedSleepSession? { browsedSession }
 
     private var utcCalendar: Calendar {
-        var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: "UTC")!; return c
+        var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone.current; return c
     }
     private var anchorToday: Date { utcCalendar.startOfDay(for: Date()) }
 
@@ -145,13 +145,13 @@ struct TodayView: View {
         if dayOffset == 0 { return "Today" }
         if dayOffset == -1 { return "Yesterday" }
         guard let d = browsedDate(dayOffset) else { return "—" }
-        let fmt = DateFormatter(); fmt.timeZone = TimeZone(identifier: "UTC"); fmt.dateFormat = "EEE, MMM d"
+        let fmt = DateFormatter(); fmt.timeZone = TimeZone.current; fmt.dateFormat = "EEE, MMM d"
         return fmt.string(from: d)
     }
 
     private var dateLabel: String {
         guard let d = browsedDate(dayOffset) else { return "—" }
-        let fmt = DateFormatter(); fmt.timeZone = TimeZone(identifier: "UTC"); fmt.dateFormat = "MM/dd/yy"
+        let fmt = DateFormatter(); fmt.timeZone = TimeZone.current; fmt.dateFormat = "MM/dd/yy"
         return fmt.string(from: d)
     }
 
@@ -169,7 +169,7 @@ struct TodayView: View {
         isLoadingDay = true
         let fmt = DateFormatter()
         fmt.calendar = utcCalendar
-        fmt.timeZone = TimeZone(identifier: "UTC")
+        fmt.timeZone = TimeZone.current
         fmt.dateFormat = "yyyy-MM-dd"
         guard let targetDate = browsedDate(offset) else { isLoadingDay = false; return }
         let day = fmt.string(from: targetDate)

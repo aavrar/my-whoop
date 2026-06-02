@@ -444,7 +444,7 @@ struct SettingsView: View {
             let cal = Calendar(identifier: .gregorian)
             let fmt = DateFormatter()
             fmt.calendar = cal
-            fmt.timeZone = TimeZone(identifier: "UTC")
+            fmt.timeZone = TimeZone.current
             fmt.dateFormat = "yyyy-MM-dd"
             let ref     = metrics.dataReferenceDate
             let fromDay = fmt.string(from: cal.date(byAdding: .day, value: -60, to: ref) ?? ref)

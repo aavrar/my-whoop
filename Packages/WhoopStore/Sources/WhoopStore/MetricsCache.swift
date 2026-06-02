@@ -174,7 +174,7 @@ extension WhoopStore {
             try Row.fetchOne(db, sql: """
                 SELECT startTs, endTs, efficiency, restingHr, avgHrv, stagesJSON, isManualOverride FROM sleepSession
                 WHERE deviceId = ?
-                ORDER BY startTs DESC LIMIT 1
+                ORDER BY endTs DESC LIMIT 1
                 """, arguments: [deviceId])
                 .map {
                     CachedSleepSession(startTs: $0["startTs"], endTs: $0["endTs"],
@@ -182,6 +182,17 @@ extension WhoopStore {
                                        avgHrv: $0["avgHrv"], stagesJSON: $0["stagesJSON"],
                                        isManualOverride: ($0["isManualOverride"] as Int? ?? 0) != 0)
                 }
+        }
+    }
+
+    /// Delete daily metric rows for days strictly after `day` (YYYY-MM-DD). Clears phantom future
+    /// rows left by obsolete clock corrections. Lexicographic compare is valid for ISO dates.
+    @discardableResult
+    public func deleteDailyMetricsAfter(deviceId: String, day: String) async throws -> Int {
+        try syncWrite { db in
+            try db.execute(sql: "DELETE FROM dailyMetric WHERE deviceId = ? AND day > ?",
+                           arguments: [deviceId, day])
+            return db.changesCount
         }
     }
 

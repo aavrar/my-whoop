@@ -15,4 +15,33 @@ final class LatestSampleTests: XCTestCase {
         let latest = try await store.latestHRSampleTs(deviceId: "d")
         XCTAssertEqual(latest, 250)
     }
+
+    func testLatestSleepSessionUsesEndTsNotStartTs() async throws {
+        let store = try await WhoopStore.inMemory()
+        try await store.upsertDevice(id: "d", mac: nil, name: nil)
+        // Edit (earlier start, the real night) vs. a stale fragment that starts later but ends
+        // earlier. Latest = most recent wake (endTs), so the edit must win — not the fragment.
+        let edit     = CachedSleepSession(startTs: 1000, endTs: 5000, efficiency: 0.95,
+                                          restingHr: 55, avgHrv: 70, stagesJSON: nil, isManualOverride: true)
+        let fragment = CachedSleepSession(startTs: 3000, endTs: 4500, efficiency: 0.9,
+                                          restingHr: 57, avgHrv: 68, stagesJSON: nil, isManualOverride: false)
+        _ = try await store.upsertSleepSessions([edit, fragment], deviceId: "d")
+        let latest = try await store.latestSleepSession(deviceId: "d")
+        XCTAssertEqual(latest?.startTs, 1000, "latestSleepSession must order by endTs, returning the later-waking session")
+    }
+
+    func testDeleteDailyMetricsAfterRemovesFutureRows() async throws {
+        let store = try await WhoopStore.inMemory()
+        try await store.upsertDevice(id: "d", mac: nil, name: nil)
+        func dm(_ day: String, strain: Double?) -> DailyMetric {
+            DailyMetric(day: day, totalSleepMin: nil, efficiency: nil, deepMin: nil, remMin: nil,
+                        lightMin: nil, disturbances: nil, restingHr: nil, avgHrv: nil, recovery: nil,
+                        strain: strain, exerciseCount: nil)
+        }
+        _ = try await store.upsertDailyMetrics([dm("2026-06-01", strain: 5), dm("2027-04-30", strain: 0)], deviceId: "d")
+        let removed = try await store.deleteDailyMetricsAfter(deviceId: "d", day: "2026-06-05")
+        XCTAssertEqual(removed, 1)
+        let rows = try await store.dailyMetrics(deviceId: "d", from: "1970-01-01", to: "2100-01-01")
+        XCTAssertEqual(rows.map(\.day), ["2026-06-01"])
+    }
 }

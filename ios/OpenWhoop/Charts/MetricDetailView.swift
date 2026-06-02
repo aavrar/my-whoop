@@ -297,7 +297,7 @@ struct MetricDetailView: View {
     private func isoFormatter() -> DateFormatter {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = TimeZone(identifier: "UTC")
+        f.timeZone = TimeZone.current
         return f
     }
 }

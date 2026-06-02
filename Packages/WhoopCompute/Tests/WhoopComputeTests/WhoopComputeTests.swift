@@ -151,6 +151,30 @@ final class WhoopComputeTests: XCTestCase {
         XCTAssertEqual(strain ?? 0.0, 0.0, accuracy: 0.01)
     }
 
+    // MARK: - Recovery (sleep duration sensitivity)
+
+    private func recoveryBaseline() -> BaselineState {
+        BaselineState(baseline: 60.0, spread: 10.0, nValid: 30, lastUpdatedTs: 0)
+    }
+
+    func testRecoveryShortSleepScoresLowerThanFullSleep() {
+        let hrvBase = recoveryBaseline()
+        let rhrBase = recoveryBaseline()
+        // Identical physiology + efficiency; only sleep-vs-need differs (3h vs 8h on an 8h need).
+        let short = Recovery.Inputs(hrv: 70, restingHr: 55, sleepEfficiency: 0.9, sleepPerformance: 180.0 / 480.0, resp: nil)
+        let full  = Recovery.Inputs(hrv: 70, restingHr: 55, sleepEfficiency: 0.9, sleepPerformance: 480.0 / 480.0, resp: nil)
+        let sShort = Recovery.score(inputs: short, hrv: hrvBase, restingHr: rhrBase, resp: nil)
+        let sFull  = Recovery.score(inputs: full,  hrv: hrvBase, restingHr: rhrBase, resp: nil)
+        XCTAssertNotNil(sShort); XCTAssertNotNil(sFull)
+        XCTAssertLessThan(sShort!, sFull!, "3h sleep must score lower recovery than 8h at equal efficiency")
+    }
+
+    func testRecoveryNilPerformanceFallsBackToEfficiency() {
+        let base = recoveryBaseline()
+        let inputs = Recovery.Inputs(hrv: 70, restingHr: 55, sleepEfficiency: 0.9, sleepPerformance: nil, resp: nil)
+        XCTAssertNotNil(Recovery.score(inputs: inputs, hrv: base, restingHr: base, resp: nil))
+    }
+
     // MARK: - Baselines
 
     func testBaselineOutOfBoundsSeedsAtMidpoint() {

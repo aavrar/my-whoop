@@ -15,11 +15,16 @@ public enum Recovery {
         public let hrv: Double
         public let restingHr: Double
         public let sleepEfficiency: Double?
+        /// Sleep actually obtained ÷ sleep need (1.0 = met need). Lets short sleep depress recovery
+        /// even when efficiency is high. Nil falls back to the efficiency-only sleep term.
+        public let sleepPerformance: Double?
         public let resp: Double?
 
-        public init(hrv: Double, restingHr: Double, sleepEfficiency: Double?, resp: Double?) {
+        public init(hrv: Double, restingHr: Double, sleepEfficiency: Double?, sleepPerformance: Double? = nil, resp: Double?) {
             self.hrv = hrv; self.restingHr = restingHr
-            self.sleepEfficiency = sleepEfficiency; self.resp = resp
+            self.sleepEfficiency = sleepEfficiency
+            self.sleepPerformance = sleepPerformance
+            self.resp = resp
         }
     }
 
@@ -45,7 +50,15 @@ public enum Recovery {
         }
 
         if let eff = inputs.sleepEfficiency {
-            let zSleep = (eff - sleepPerfCenter) / sleepPerfScale
+            // Blend efficiency with sleep-vs-need so short sleep can't post a high score on
+            // efficiency alone. Performance is capped at 1.0 — exceeding need doesn't boost recovery.
+            let quality: Double
+            if let perf = inputs.sleepPerformance {
+                quality = 0.5 * eff + 0.5 * min(perf, 1.0)
+            } else {
+                quality = eff
+            }
+            let zSleep = (quality - sleepPerfCenter) / sleepPerfScale
             terms.append((zSleep, wSleep))
         }
 

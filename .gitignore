@@ -70,3 +70,6 @@ ios/build/
 
 # Mac-side device-soak captures (gitignored; not the committed hist_biometric.bin fixture)
 fixtures/soak_*.bin
+
+# RE scratch probe scripts (local only)
+re/_*.py

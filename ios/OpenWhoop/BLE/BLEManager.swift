@@ -48,6 +48,9 @@ public final class BLEManager: NSObject, ObservableObject {
     /// Newest record unix the strap reports having (from the GET_DATA_RANGE response); refreshed each
     /// offload. Compared against our frontier to tell "stuck" from "off-wrist/caught-up".
     private var strapNewestTs: Int?
+    /// Last acked strap_trim cursor. Fed to the stuck detector: a climbing trim with a frozen data
+    /// frontier is the "empty-END spin" that a wrong-RTC strapNewest used to hide.
+    private var lastTrimCursor: Int?
     /// Fires if the strap goes silent mid-offload; re-armed on every frame during backfill.
     private var backfillTimeout: DispatchWorkItem?
     /// Periodic opportunistic upload while connected. Without it, upload only fires at connect +
@@ -277,7 +280,18 @@ public final class BLEManager: NSObject, ObservableObject {
     /// The `trim` argument (= end_data first u32) is already persisted as the strap_trim cursor by
     /// the Backfiller; it is passed here only for logging.
     func ackHistoricalChunk(trim: UInt32, endData: [UInt8]) {
+        lastTrimCursor = Int(trim)
         send(.historicalDataResult, payload: [0x01] + endData, writeType: .withResponse)
+    }
+
+    /// Manual recovery for a wedged offload (the empty-END spin): exit the high-freq-sync mode that
+    /// can starve historical serving, re-latch the clock, and kick a fresh sync. Surfaced as the
+    /// Device-tab "Recover sync" button and also run automatically when the watchdog flags stuck.
+    func forceRecover() {
+        log("Manual recovery: EXIT_HIGH_FREQ_SYNC + SET_CLOCK + resync")
+        send(.exitHighFreqSync, payload: [0x00])
+        send(.setClock, payload: BLEManager.setClockPayload())
+        requestSync(.manual)
     }
 
     // MARK: Backfill helpers
@@ -410,6 +424,7 @@ public final class BLEManager: NSObject, ObservableObject {
             let now = Date().timeIntervalSince1970
             let stuck = stuckDetector.observe(strapNewestTs: strapNewest,
                                               ourFrontierTs: front,
+                                              trimCursor: self.lastTrimCursor,
                                               now: now)
             state.strapNeedsReboot = stuck
             if stuck {

@@ -19,7 +19,7 @@ struct DayDetailView: View {
     private var formattedDate: String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
-        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.timeZone = TimeZone.current
         guard let date = formatter.date(from: metric.day) else { return metric.day }
         let out = DateFormatter()
         out.dateStyle = .full

@@ -310,6 +310,10 @@ private struct LiveContentView: View {
                                   accent: WH.Color.teal, prominent: false) {
                         model.syncNow()
                     }
+                    consoleButton("Recover", icon: "bandage",
+                                  accent: WH.Color.recoveryYellow, prominent: false) {
+                        model.recoverSync()
+                    }
                 }
             }
         }

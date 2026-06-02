@@ -36,6 +36,22 @@ final class StuckStrapDetectorTests: XCTestCase {
         XCTAssertTrue(d.observe(strapNewestTs: 9000, ourFrontierTs: 1000, now: 5601))
         XCTAssertFalse(d.observe(strapNewestTs: 9000, ourFrontierTs: 3000, now: 5700)) // advanced → clear
     }
+    // Empty-END spin: the offload trim cursor keeps advancing but no real data lands (frontier
+    // frozen). Stuck even when the strap doesn't look "behind" (a wrong/old RTC left strapNewest
+    // nil or stale) — the clock-independent signal that the offload is wedged.
+    func testTrimAdvancingFrozenFrontierIsStuck() {
+        var d = make()
+        _ = d.observe(strapNewestTs: nil, ourFrontierTs: 1000, trimCursor: 35505, now: 5000)            // seed
+        XCTAssertFalse(d.observe(strapNewestTs: nil, ourFrontierTs: 1000, trimCursor: 35600, now: 5500)) // 500s < 600
+        XCTAssertTrue(d.observe(strapNewestTs: nil, ourFrontierTs: 1000, trimCursor: 35700, now: 5601))  // climbing, frozen, >600s
+    }
+    // Trim AND frontier advancing → a healthy offload, not stuck.
+    func testTrimAndFrontierAdvancingNotStuck() {
+        var d = make()
+        _ = d.observe(strapNewestTs: nil, ourFrontierTs: 1000, trimCursor: 35505, now: 5000)
+        XCTAssertFalse(d.observe(strapNewestTs: nil, ourFrontierTs: 5000, trimCursor: 35600, now: 5601)) // frontier grew
+    }
+
     // nil inputs (no range / no data yet) → not stuck.
     func testNilNotStuck() {
         var d = make()
