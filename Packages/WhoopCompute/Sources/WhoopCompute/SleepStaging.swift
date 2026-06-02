@@ -5,7 +5,7 @@ public enum SleepStaging {
     static let featureWindowS: Double = 5 * 60
     static let smoothEpochs = 5
     static let noRemAfterOnsetS: Double = 15 * 60
-    static let deepFirstFraction = 1.0 / 3.0
+    static let deepFirstFraction = 1.0 / 2.0
     static let onsetPersistEpochs = 3
     static let wakeMoveThresh: Double = 0.15
     static let stillMoveThresh: Double = 0.10
@@ -160,35 +160,34 @@ public enum SleepStaging {
     }
 
     static func classify(epochs: [Epoch]) -> [String] {
-        let hrs   = epochs.compactMap { $0.meanHR }
-        let rmssds = epochs.compactMap { $0.rmssd }
+        let hrs    = epochs.compactMap { $0.meanHR }
         let hrStds = epochs.compactMap { $0.hrStd }
 
-        let hrLowP  = percentile(hrs, 0.25)
-        let hrHighP = percentile(hrs, 0.70)
-        let rmssdHighP = percentile(rmssds, 0.70)
-        let hrStdHighP = percentile(hrStds, 0.65)
+        // HR thresholds: low = deep, high = wake. HR-variability (DoG) thresholds discriminate the
+        // two "still" stages — deep sleep has STABLE HR (low DoG), REM has ERRATIC HR (high DoG).
+        let hrLowP     = percentile(hrs, 0.40)
+        let hrHighP    = percentile(hrs, 0.75)
+        let hrStdLowP  = percentile(hrStds, 0.50)
+        let hrStdHighP = percentile(hrStds, 0.60)
 
         return epochs.map { epoch in
             let moveFrac = epoch.moveFrac
             let hr = epoch.meanHR
-            let rmssd = epoch.rmssd
             let hrStd = epoch.hrStd
 
-            let hrHigh    = hr.map    { $0 >= hrHighP }    ?? false
-            let hrVarHigh = hrStd.map { $0 >= hrStdHighP } ?? false
+            let hrHigh  = hr.map    { $0 >= hrHighP }    ?? false
+            let hrLow   = hr.map    { $0 <= hrLowP }     ?? false
+            let varHigh = hrStd.map { $0 >= hrStdHighP } ?? false
+            let varLow  = hrStd.map { $0 <= hrStdLowP }  ?? true   // no variability signal → treat as stable
 
-            if moveFrac >= wakeMoveThresh && (hr == nil || hrHigh || hrVarHigh) {
-                return "wake"
-            }
+            // Wake: real movement AND elevated HR. Otherwise the epoch is asleep and staged below —
+            // no separate stillness gate (that was dumping most of the night into "light").
+            if moveFrac >= wakeMoveThresh && (hr == nil || hrHigh) { return "wake" }
 
-            let isStill = moveFrac <= stillMoveThresh
-            let hrLow   = hr.map { $0 <= hrLowP }  ?? false
-            let rmssdHigh = rmssd.map { $0 >= rmssdHighP } ?? false
-
-            if isStill && hrLow && rmssdHigh { return "deep" }
-            if isStill && !hrHigh && hrVarHigh { return "rem" }
-            if isStill && hrHigh && hrVarHigh { return "rem" }
+            // Deep (slow-wave): low and STABLE HR.
+            if hrLow && varLow { return "deep" }
+            // REM: erratic HR (atonia, so movement is low but HR swings).
+            if varHigh { return "rem" }
             return "light"
         }
     }
