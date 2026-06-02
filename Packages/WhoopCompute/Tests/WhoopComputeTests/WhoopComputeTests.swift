@@ -111,44 +111,60 @@ final class WhoopComputeTests: XCTestCase {
         }
     }
 
-    // MARK: - Strain
+    // MARK: - Strain (WHOOP-faithful absolute load + personalized anchor)
 
-    func testStrainGapCapPreventsBlowup() {
-        // 600 samples in two bursts with an 18000s (5-hour) gap between them.
-        // Without gap cap, the single 18000s interval would inflate TRIMP enormously.
-        // With gap cap (>300s skipped), only the real work-interval durations count.
+    func testRawLoadZeroAtRestingHR() {
+        // HR pinned at resting → no reserve used → zero load.
+        let restHR = stride(from: 0, to: 3600, by: 1).map { (ts: $0, bpm: 60) }
+        XCTAssertEqual(Strain.rawLoad(hr: restHR, restingHr: 60, age: 30), 0.0, accuracy: 1e-9)
+    }
+
+    func testRawLoadGapCapped() {
+        // Same active duration, one split by a 5h gap. The >300s gap is skipped, so loads match.
         let burst1 = stride(from: 0, to: 300, by: 1).map { (ts: $0, bpm: 160) }
         let burst2 = stride(from: 18300, to: 18600, by: 1).map { (ts: $0, bpm: 160) }
-        let gapHR = burst1 + burst2
-
-        // Uncapped version: same data but gap not capped (simulate by making gap ≤300s)
-        let noCap = stride(from: 0, to: 600, by: 1).map { (ts: $0, bpm: 160) }
-
-        let withGap  = Strain.compute(hr: gapHR, restingHr: 60, age: 30)
-        let withoutGap = Strain.compute(hr: noCap, restingHr: 60, age: 30)
-
-        XCTAssertNotNil(withGap)
-        XCTAssertNotNil(withoutGap)
-        // Both should be similar since active-duration is identical (~5 min each)
-        if let g = withGap, let ng = withoutGap {
-            XCTAssertEqual(g, ng, accuracy: ng * 0.05, "Gap-capped strain should match same-duration ungapped strain")
-        }
+        let gapped = Strain.rawLoad(hr: burst1 + burst2, restingHr: 60, age: 30)
+        let contiguous = Strain.rawLoad(hr: stride(from: 0, to: 600, by: 1).map { (ts: $0, bpm: 160) },
+                                        restingHr: 60, age: 30)
+        XCTAssertGreaterThan(gapped, 0)
+        XCTAssertEqual(gapped, contiguous, accuracy: contiguous * 0.05)
     }
 
-    func testStrainBanisterHigherThanEdwardsAtHighIntensity() {
-        // minReadings=600; use 1s spacing for 600s of high-intensity HR
-        let highHR = stride(from: 0, to: 600, by: 1).map { (ts: $0, bpm: 175) }
-        let edwards  = Strain.compute(hr: highHR, restingHr: 60, age: 30, sex: "male", method: "edwards")
-        let banister = Strain.compute(hr: highHR, restingHr: 60, age: 30, sex: "male", method: "banister")
-        XCTAssertNotNil(edwards)
-        XCTAssertNotNil(banister)
-        XCTAssertGreaterThan(banister!, 0.0)
+    func testRawLoadMonotonicInIntensity() {
+        // Higher sustained HR → strictly more load (intensity is exponentially weighted).
+        let easy = Strain.rawLoad(hr: stride(from: 0, to: 1800, by: 1).map { (ts: $0, bpm: 90) },  restingHr: 60, age: 30)
+        let hard = Strain.rawLoad(hr: stride(from: 0, to: 1800, by: 1).map { (ts: $0, bpm: 150) }, restingHr: 60, age: 30)
+        XCTAssertGreaterThan(easy, 0)
+        XCTAssertGreaterThan(hard, easy)
     }
 
-    func testStrainZeroForRestingHR() {
-        let restHR = stride(from: 0, to: 600, by: 1).map { (ts: $0, bpm: 60) }
-        let strain = Strain.compute(hr: restHR, restingHr: 60, age: 30)
-        XCTAssertEqual(strain ?? 0.0, 0.0, accuracy: 0.01)
+    func testScoreOrderingAndAnchor() {
+        // Score is monotonic in load, hits 21 at the anchor, and a rest day stays well below a hard day.
+        let anchor = 300.0
+        let rest   = Strain.score(load: 10,  anchor: anchor)
+        let normal = Strain.score(load: 90,  anchor: anchor)
+        let hard   = Strain.score(load: 300, anchor: anchor)
+        XCTAssertLessThan(rest, normal)
+        XCTAssertLessThan(normal, hard)
+        XCTAssertEqual(hard, 21.0, accuracy: 1e-6)         // load == anchor → 21
+        XCTAssertEqual(Strain.score(load: 0, anchor: anchor), 0.0)
+    }
+
+    func testScoreFlooredAnchorPreventsCollapse() {
+        // A tiny anchor (sedentary stretch) is floored, so a moderate load can't read 21.
+        let s = Strain.score(load: 90, anchor: 5)
+        XCTAssertLessThan(s, 21.0)
+        XCTAssertEqual(s, Strain.score(load: 90, anchor: Strain.floorAnchor), accuracy: 1e-9)
+    }
+
+    func testAnchorRisesOnHardDayDecaysOtherwise() {
+        // A hard day jumps the anchor up; an easy day lets it decay (but never below the floor).
+        let raised = Strain.updatedAnchor(previous: Strain.floorAnchor, dayLoad: 900)
+        XCTAssertEqual(raised, 900, accuracy: 1e-9)
+        let decayed = Strain.updatedAnchor(previous: 900, dayLoad: 10)
+        XCTAssertLessThan(decayed, 900)
+        XCTAssertGreaterThanOrEqual(decayed, Strain.floorAnchor)
+        XCTAssertEqual(Strain.updatedAnchor(previous: Strain.floorAnchor, dayLoad: 0), Strain.floorAnchor, accuracy: 1e-9)
     }
 
     // MARK: - Recovery (sleep duration sensitivity)

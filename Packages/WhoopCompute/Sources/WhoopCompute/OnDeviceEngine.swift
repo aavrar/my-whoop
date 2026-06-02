@@ -115,10 +115,12 @@ public actor OnDeviceEngine {
         guard let bestGroup = groups.max(by: {
             $0.reduce(0) { $0 + $1.end - $1.start } < $1.reduce(0) { $0 + $1.end - $1.start }
         }) else {
+            let nowTs = Int(Date().timeIntervalSince1970)
             let strainHR = hrInput.filter { $0.ts >= dayStart && $0.ts < dayEnd }
             await consolidateSessions(keepStartTs: nil, dayStart: dayStart, dayEnd: dayEnd)
             let rhr = baselines[BaselineMetric.restingHr.rawValue].map { Int($0.baseline) } ?? 55
-            let strain = Strain.compute(hr: strainHR, restingHr: rhr, age: profile.age, sex: profile.sex)
+            let strain = strainScore(hr: strainHR, rhr: rhr, baselines: &baselines, nowTs: nowTs)
+            await saveBaselines(baselines)
             let needMin = SleepNeed.need(strain: strain, recovery: nil)
             let metric = DailyMetric(day: dayStr, totalSleepMin: nil, efficiency: nil, deepMin: nil,
                                      remMin: nil, lightMin: nil, disturbances: nil, restingHr: nil,
@@ -169,6 +171,10 @@ public actor OnDeviceEngine {
                 state: baselines[BaselineMetric.restingHr.rawValue], value: Double(rhr), cfg: cfg, nowTs: nowTs)
         }
 
+        let rhrForStrain = resting ?? Int(baselines[BaselineMetric.restingHr.rawValue]?.baseline ?? 55)
+        let strain = strainScore(hr: hrInput.filter { $0.ts >= dayStart && $0.ts < dayEnd },
+                                 rhr: rhrForStrain, baselines: &baselines, nowTs: nowTs)
+
         await saveBaselines(baselines)
 
         let recovery: Double?
@@ -188,10 +194,6 @@ public actor OnDeviceEngine {
         } else {
             recovery = nil
         }
-
-        let rhrForStrain = resting ?? Int(baselines[BaselineMetric.restingHr.rawValue]?.baseline ?? 55)
-        let strainHR = hrInput.filter { $0.ts >= dayStart && $0.ts < dayEnd }
-        let strain = Strain.compute(hr: strainHR, restingHr: rhrForStrain, age: profile.age, sex: profile.sex)
 
         let respSamples = (try? await store.respSamples(deviceId: deviceId, from: sleepRun.start, to: sleepRun.end, limit: Self.streamLimitPerDay)) ?? []
         let respRateBpm: Double? = respSamples.isEmpty ? nil : {
@@ -375,6 +377,22 @@ public actor OnDeviceEngine {
     private func decodeStages(_ json: String) -> [StageSegment]? {
         guard let data = json.data(using: .utf8) else { return nil }
         return try? JSONDecoder().decode([StageSegment].self, from: data)
+    }
+
+    /// Compute WHOOP-style day strain: raw cardiovascular load → personalized 0–21 score against a
+    /// rolling "strainAnchor" baseline (the load that reads 21), then advance the anchor in the
+    /// baselines map (persisted by the caller's saveBaselines). The anchor rises with hard days and
+    /// decays slowly, so the same effort yields less strain as fitness improves.
+    private func strainScore(hr: [(ts: Int, bpm: Int)], rhr: Int,
+                             baselines: inout [String: BaselineState], nowTs: Int) -> Double {
+        let load = Strain.rawLoad(hr: hr, restingHr: rhr, age: profile.age, sex: profile.sex)
+        let prevAnchor = baselines["strainAnchor"]?.baseline ?? Strain.floorAnchor
+        let strain = Strain.score(load: load, anchor: prevAnchor)
+        let prevN = baselines["strainAnchor"]?.nValid ?? 0
+        baselines["strainAnchor"] = BaselineState(
+            baseline: Strain.updatedAnchor(previous: prevAnchor, dayLoad: load),
+            spread: 0, nValid: prevN + 1, lastUpdatedTs: nowTs)
+        return strain
     }
 
     /// Enforce one session per wake-day. After writing the chosen session, remove other sessions
