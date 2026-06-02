@@ -136,6 +136,19 @@ final class Backfiller {
             let parsed = frames.map { parseFrame($0) }
             var decoded = extract(parsed, ref.device, ref.wall, rtcSkew)
             decoded = HistoricalTimestampNormalize.applyIfNeeded(decoded, wall: ref.wall)
+
+            // Silent-loss guard: if type-47 (HISTORICAL_DATA) records arrived but decoded to ZERO
+            // rows (a decode/clock fault), do NOT setCursor/ack — acking permanently trims the chunk
+            // off the strap. Bail so the strap re-serves it next session; the frozen frontier + a
+            // climbing trim then trips the stuck watchdog (visible + recoverable, not silent loss).
+            // Chunks with no type-47 frames (pure metadata/empty ENDs) are exempt so the offload
+            // still progresses normally.
+            let decodedRows = decoded.hr.count + decoded.rr.count + decoded.events.count
+                + decoded.battery.count + decoded.spo2.count + decoded.skinTemp.count
+                + decoded.resp.count + decoded.gravity.count
+            let hasBiometricFrames = frames.contains { $0.count > 4 && $0[4] == 47 }
+            if hasBiometricFrames && decodedRows == 0 { return }
+
             do { try await store.insert(decoded, deviceId: deviceId) } catch { return }
 
             // RAW: only persisted when the research toggle is ON. Default OFF → decoded-only; the

@@ -119,7 +119,8 @@ public enum SleepStaging {
     static func epochActivityCounts(epochs: [Epoch], gravity: [SleepDetection.GravitySample], deltas: [Double]) -> [Double] {
         epochs.map { epoch in
             guard let startIdx = gravity.firstIndex(where: { $0.ts >= epoch.start }),
-                  let endIdx   = gravity.lastIndex(where:  { $0.ts < epoch.end }) else { return 0 }
+                  let endIdx   = gravity.lastIndex(where:  { $0.ts < epoch.end }),
+                  startIdx <= endIdx else { return 0 }   // epoch sits inside a gravity gap → no activity
             let epochDeltas = Array(deltas[startIdx...endIdx])
             return epochDeltas.reduce(0, +)
         }

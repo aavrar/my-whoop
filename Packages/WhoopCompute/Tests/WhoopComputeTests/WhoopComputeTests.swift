@@ -220,6 +220,18 @@ final class WhoopComputeTests: XCTestCase {
         }
     }
 
+    // An epoch that falls entirely inside a gravity GAP (samples on both sides, none within) makes
+    // firstIndex(>=start) land AFTER lastIndex(<end) → startIdx > endIdx. Must yield 0, not crash
+    // ("Range requires lowerBound <= upperBound"). Regression for the morning-compute crash.
+    func testEpochActivityCountsGapDoesNotCrash() {
+        let epochs = [SleepStaging.Epoch(start: 100, end: 200, meanHR: 60, rmssd: nil, moveFrac: 0, hrStd: nil)]
+        let gravity = [SleepDetection.GravitySample(ts: 50,  x: 0, y: 0, z: 1),
+                       SleepDetection.GravitySample(ts: 300, x: 0, y: 0, z: 1)]
+        let deltas: [Double] = [0.0, 0.5]
+        let counts = SleepStaging.epochActivityCounts(epochs: epochs, gravity: gravity, deltas: deltas)
+        XCTAssertEqual(counts, [0.0], "an epoch inside a gravity gap must contribute 0, not crash")
+    }
+
     // MARK: - Unit scaling
 
     func testRespRateFormulaInPhysiologicalRange() {

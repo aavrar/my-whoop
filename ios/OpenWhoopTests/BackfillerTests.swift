@@ -85,6 +85,12 @@ private func dataFrame() -> [UInt8] {
     frameFromPayload([0x00, 0x01], type: 40, seq: 0, cmd: 0)
 }
 
+/// A HISTORICAL_DATA frame (type 47) — the real biometric record type. Used to test the
+/// "decoded-to-nothing ⇒ don't trim" safety guard.
+private func histDataFrame() -> [UInt8] {
+    frameFromPayload([0x00, 0x01], type: 47, seq: 0, cmd: 0)
+}
+
 // MARK: - BackfillerTests
 
 @MainActor
@@ -92,6 +98,37 @@ final class BackfillerTests: XCTestCase {
 
     private func defaultRef() -> ClockRef {
         ClockRef(device: 1_000_000, wall: 1_700_000_000)
+    }
+
+    // MARK: - silent-loss guard: type-47 frames that decode to zero rows must NOT be acked
+
+    func testBiometricFramesDecodingToNothingAreNotAcked() async throws {
+        let store = SpyBackfillStore()
+        var acks: [UInt32] = []
+        let bf = Backfiller(store: store, deviceId: "whoop-test",
+                            ackTrim: { v, _ in acks.append(v) },
+                            extract: { _, _, _, _ in Streams() })   // decodes to nothing
+        bf.clockRef = defaultRef()
+        bf.begin()
+        await bf.ingest(histDataFrame())                            // real biometric (type-47) record
+        await bf.ingest(endFrame(unix: 1_700_000_100, trim: 4242))
+        // Acking trims the chunk off the strap forever; with no rows stored that's silent loss.
+        XCTAssertTrue(acks.isEmpty, "must not ack a type-47 chunk that decoded to zero rows")
+        XCTAssertFalse(store.calls.contains(.setCursor(name: "strap_trim", value: 4242)),
+                       "must not advance the trim cursor when nothing was stored")
+    }
+
+    func testBiometricFramesWithRowsAreAcked() async throws {
+        let store = SpyBackfillStore()
+        var acks: [UInt32] = []
+        let bf = Backfiller(store: store, deviceId: "whoop-test",
+                            ackTrim: { v, _ in acks.append(v) },
+                            extract: { _, _, _, _ in Streams(hr: [HRSample(ts: 1, bpm: 60)]) })
+        bf.clockRef = defaultRef()
+        bf.begin()
+        await bf.ingest(histDataFrame())
+        await bf.ingest(endFrame(unix: 1_700_000_100, trim: 4242))
+        XCTAssertEqual(acks, [4242], "a chunk that stored rows must still be acked")
     }
 
     // MARK: - clean chunk: START → data → data → END(unix, trim)
