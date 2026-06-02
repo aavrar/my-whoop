@@ -398,7 +398,7 @@ public final class BLEManager: NSObject, ObservableObject {
             state.lastSyncedAt = Date().timeIntervalSince1970
             UserDefaults.standard.set(state.lastSyncedAt, forKey: "lastSyncedAt")
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            SyncStatusNotifier.post()
+            let syncedAt = Date()
             Task {
                 if let store = self.whoopStore {
                     let wall = Int(Date().timeIntervalSince1970)
@@ -406,7 +406,11 @@ public final class BLEManager: NSObject, ObservableObject {
                         self.log("Repaired \(n) future-dated stream row(s) after offload")
                     }
                 }
+                // Recompute so the app is fresh on next foreground, then surface the just-computed
+                // day strain in the (passive) sync notification.
                 _ = await BackgroundCompute.run(days: 14, force: true)
+                let latest = (try? await self.whoopStore?.latestDailyMetric(deviceId: self.deviceId)) ?? nil
+                SyncStatusNotifier.post(at: syncedAt, strain: latest?.strain)
             }
         }
         checkStrapLiveness()         // safety-net: strap ahead of us AND our frontier frozen ⇒ stuck?
