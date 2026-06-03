@@ -407,8 +407,9 @@ public final class BLEManager: NSObject, ObservableObject {
                     }
                 }
                 // Recompute so the app is fresh on next foreground, then surface the just-computed
-                // day strain in the (passive) sync notification.
-                _ = await BackgroundCompute.run(days: 14, force: true)
+                // day strain in the (passive) sync notification. force=false: finalized nights stay
+                // frozen (no costly re-stage); BackgroundCompute refreshes today's strain cheaply.
+                _ = await BackgroundCompute.run(days: 14, force: false)
                 let latest = (try? await self.whoopStore?.latestDailyMetric(deviceId: self.deviceId)) ?? nil
                 SyncStatusNotifier.post(at: syncedAt, strain: latest?.strain)
             }

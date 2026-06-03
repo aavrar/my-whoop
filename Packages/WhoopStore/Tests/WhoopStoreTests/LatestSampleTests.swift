@@ -44,4 +44,22 @@ final class LatestSampleTests: XCTestCase {
         let rows = try await store.dailyMetrics(deviceId: "d", from: "1970-01-01", to: "2100-01-01")
         XCTAssertEqual(rows.map(\.day), ["2026-06-01"])
     }
+
+    func testUpdateDailyStrainTouchesOnlyStrain() async throws {
+        let store = try await WhoopStore.inMemory()
+        try await store.upsertDevice(id: "d", mac: nil, name: nil)
+        let m = DailyMetric(day: "2026-06-02", totalSleepMin: 480, efficiency: 0.9, deepMin: 60,
+                            remMin: 90, lightMin: 300, disturbances: 3, restingHr: 55, avgHrv: 70,
+                            recovery: 80, strain: 5, exerciseCount: nil)
+        _ = try await store.upsertDailyMetrics([m], deviceId: "d")
+        let n = try await store.updateDailyStrain(deviceId: "d", day: "2026-06-02", strain: 12.3)
+        XCTAssertEqual(n, 1)
+        let row = try await store.dailyMetrics(deviceId: "d", from: "2026-06-02", to: "2026-06-02").first
+        XCTAssertEqual(row?.strain, 12.3)            // strain updated
+        XCTAssertEqual(row?.totalSleepMin, 480)      // sleep untouched
+        XCTAssertEqual(row?.deepMin, 60)
+        // no-op when the day has no row
+        let missing = try await store.updateDailyStrain(deviceId: "d", day: "2099-01-01", strain: 1)
+        XCTAssertEqual(missing, 0)
+    }
 }

@@ -17,6 +17,7 @@ enum BackgroundCompute {
             await engine.setProfile(profile)
         }
         await engine.computeRecent(days: days, force: force)
+        await engine.refreshCurrentDayStrain()
         return true
     }
 }

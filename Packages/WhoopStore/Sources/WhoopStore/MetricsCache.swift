@@ -185,6 +185,17 @@ extension WhoopStore {
         }
     }
 
+    /// Update only the `strain` field of an existing daily row — intraday strain accrual without
+    /// re-staging sleep or disturbing recovery/stages. No-op if the row doesn't exist yet.
+    @discardableResult
+    public func updateDailyStrain(deviceId: String, day: String, strain: Double) async throws -> Int {
+        try syncWrite { db in
+            try db.execute(sql: "UPDATE dailyMetric SET strain = ? WHERE deviceId = ? AND day = ?",
+                           arguments: [strain, deviceId, day])
+            return db.changesCount
+        }
+    }
+
     /// Delete daily metric rows for days strictly after `day` (YYYY-MM-DD). Clears phantom future
     /// rows left by obsolete clock corrections. Lexicographic compare is valid for ISO dates.
     @discardableResult

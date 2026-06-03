@@ -1,5 +1,6 @@
 import XCTest
 import WhoopStore
+import WhoopProtocol
 @testable import OpenWhoop
 
 @MainActor
@@ -242,5 +243,22 @@ final class MetricsRepositoryTests: XCTestCase {
         XCTAssertFalse(repo.isRefreshing, "isRefreshing must be false after refresh completes")
         XCTAssertNotNil(repo.today, "refresh must still populate today from cache")
         XCTAssertNotNil(repo.lastNight, "refresh must still populate lastNight from cache")
+    }
+
+    // MARK: - HR downsampling (local Trends fallback)
+
+    func testDownsampleHRBucketsAndAverages() {
+        // 100 samples at 1/s; window 100s, maxPoints 10 → ten 10s buckets.
+        let samples = (0..<100).map { HRSample(ts: 1000 + $0, bpm: 60 + $0) }
+        let pts = MetricsRepository.downsampleHR(samples, fromEpoch: 1000, toEpoch: 1100, maxPoints: 10)
+        XCTAssertEqual(pts.count, 10)
+        XCTAssertEqual(pts.first?.value ?? 0, 64.5, accuracy: 0.01)   // bpm 60..69 avg
+        XCTAssertTrue(zip(pts, pts.dropFirst()).allSatisfy { $0.date < $1.date }, "points ordered by time")
+    }
+
+    func testDownsampleHREmptyInputs() {
+        XCTAssertTrue(MetricsRepository.downsampleHR([], fromEpoch: 0, toEpoch: 100, maxPoints: 10).isEmpty)
+        let s = [HRSample(ts: 5, bpm: 60)]
+        XCTAssertTrue(MetricsRepository.downsampleHR(s, fromEpoch: 100, toEpoch: 100, maxPoints: 10).isEmpty, "zero-width window")
     }
 }

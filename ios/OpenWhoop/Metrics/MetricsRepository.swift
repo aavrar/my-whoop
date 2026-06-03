@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import WhoopStore
 import WhoopCompute
+import WhoopProtocol
 
 // MARK: - MetricsRepository
 //
@@ -168,7 +169,10 @@ final class MetricsRepository: ObservableObject {
                 if let h = raw["height_cm"] as? Double { engineProfile.heightCm = h }
                 await engine.setProfile(engineProfile)
             }
-            await engine.computeRecent(days: 14, force: true)
+            // force=false: finalized nights stay frozen (no re-stage on every open); only new days
+            // compute. Today's strain still accrues via the cheap refreshCurrentDayStrain below.
+            await engine.computeRecent(days: 14, force: false)
+            await engine.refreshCurrentDayStrain()
         }
         await load()
         await syncToHealthKit()
@@ -312,14 +316,38 @@ final class MetricsRepository: ObservableObject {
     /// Returns [] on any network error or when unconfigured.
     func hrSeries(fromEpoch: Int, toEpoch: Int, maxPoints: Int) async -> [TrendPoint] {
         await ensureOpen()
-        guard let serverSync else { return [] }
-        let raw = await serverSync.getHRSeries(fromEpoch: fromEpoch, toEpoch: toEpoch, maxPoints: maxPoints)
-        return raw.map { pair in
-            TrendPoint(
-                id: "\(pair.ts)",
-                date: Date(timeIntervalSince1970: TimeInterval(pair.ts)),
-                value: Double(pair.bpm)
-            )
+        if let serverSync {
+            let raw = await serverSync.getHRSeries(fromEpoch: fromEpoch, toEpoch: toEpoch, maxPoints: maxPoints)
+            if !raw.isEmpty {
+                return raw.map { TrendPoint(id: "\($0.ts)",
+                                            date: Date(timeIntervalSince1970: TimeInterval($0.ts)),
+                                            value: Double($0.bpm)) }
+            }
+        }
+        // Local fallback (on-device, or server returned nothing): read raw HR straight from the
+        // on-device store and downsample. This is why the HR card was empty with no server.
+        guard let store else { return [] }
+        let samples = (try? await store.hrSamples(deviceId: deviceId,
+                                                  from: fromEpoch, to: toEpoch, limit: 200_000)) ?? []
+        return MetricsRepository.downsampleHR(samples, fromEpoch: fromEpoch, toEpoch: toEpoch, maxPoints: maxPoints)
+    }
+
+    /// Bucket-average a raw HR stream down to ≤ `maxPoints` points for charting. Pure + testable.
+    static func downsampleHR(_ samples: [HRSample], fromEpoch: Int, toEpoch: Int, maxPoints: Int) -> [TrendPoint] {
+        guard !samples.isEmpty, toEpoch > fromEpoch, maxPoints > 0 else { return [] }
+        let bucketSec = max(1, (toEpoch - fromEpoch) / max(1, min(maxPoints, samples.count)))
+        var agg: [Int: (sum: Int, n: Int)] = [:]
+        for s in samples where s.ts >= fromEpoch && s.ts <= toEpoch {
+            let b = (s.ts - fromEpoch) / bucketSec
+            let cur = agg[b] ?? (0, 0)
+            agg[b] = (cur.sum + s.bpm, cur.n + 1)
+        }
+        return agg.keys.sorted().map { b in
+            let (sum, n) = agg[b]!
+            let ts = fromEpoch + b * bucketSec + bucketSec / 2
+            return TrendPoint(id: "\(ts)",
+                              date: Date(timeIntervalSince1970: TimeInterval(ts)),
+                              value: Double(sum) / Double(n))
         }
     }
 

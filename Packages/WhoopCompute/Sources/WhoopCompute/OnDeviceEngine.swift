@@ -73,6 +73,36 @@ public actor OnDeviceEngine {
         }
     }
 
+    /// Cheap intraday refresh of the CURRENT day's strain only: recompute load over today's HR and
+    /// update just the `strain` field, without re-staging sleep or folding the anchor. Lets strain
+    /// keep accruing through the day while finalized nights stay frozen — so opening the app doesn't
+    /// re-run the costly per-night staging. The anchor is read-only here (it advances once per
+    /// finalized day in `computeDay`). No-op if today has no row yet (computeRecent creates it first).
+    public func refreshCurrentDayStrain() async {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = timeZone
+        let latestHRTs = (try? await store.latestHRSampleTs(deviceId: deviceId))
+            ?? Int(Date().timeIntervalSince1970)
+        let fmt = DateFormatter()
+        fmt.calendar = cal; fmt.timeZone = timeZone; fmt.dateFormat = "yyyy-MM-dd"
+        let dayStr = fmt.string(from: Date(timeIntervalSince1970: TimeInterval(latestHRTs)))
+        guard let win = EngineDay.window(dayStr: dayStr, calendar: cal),
+              let hr = try? await store.hrSamples(deviceId: deviceId, from: win.dayStart, to: win.dayEnd,
+                                                  limit: Self.streamLimitPerDay),
+              !hr.isEmpty else { return }
+        let baselines = await loadBaselines()
+        // Use the SAME resting HR computeDay used for this day (the night's RHR when available, else
+        // the baseline) so the intraday refresh matches the nightly compute instead of shifting it.
+        let dayRow = (try? await store.dailyMetrics(deviceId: deviceId, from: dayStr, to: dayStr))?.first
+        let baselineRHR = baselines[BaselineMetric.restingHr.rawValue].map { Int($0.baseline) }
+        let rhr = dayRow?.restingHr ?? baselineRHR ?? 55
+        let anchor = baselines["strainAnchor"]?.baseline ?? Strain.floorAnchor
+        let load = Strain.rawLoad(hr: hr.map { (ts: $0.ts, bpm: $0.bpm) },
+                                  restingHr: rhr, age: profile.age, sex: profile.sex)
+        try? await store.updateDailyStrain(deviceId: deviceId, day: dayStr,
+                                           strain: Strain.score(load: load, anchor: anchor))
+    }
+
     // MARK: - Per-day computation
 
     private func computeDay(dayStr: String, cal: Calendar, fmt: DateFormatter, baselines: inout [String: BaselineState]) async {

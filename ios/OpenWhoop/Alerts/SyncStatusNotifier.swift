@@ -2,7 +2,7 @@ import Foundation
 import UserNotifications
 
 enum SyncStatusNotifier {
-    private static let notificationId = "com.openwhoop.syncStatus"
+    private static let idPrefix = "com.openwhoop.syncStatus"
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateStyle = .none
@@ -22,8 +22,11 @@ enum SyncStatusNotifier {
         content.title = "OpenWhoop"
         content.body = body(at: date, strain: strain)
         content.interruptionLevel = .passive
+        // Unique id per post so notifications STACK into a glanceable history instead of the newest
+        // replacing the previous one (iOS coalesces requests that share an identifier).
+        let id = "\(idPrefix).\(UUID().uuidString)"
         UNUserNotificationCenter.current().add(
-            UNNotificationRequest(identifier: notificationId, content: content, trigger: nil)
+            UNNotificationRequest(identifier: id, content: content, trigger: nil)
         )
     }
 }
