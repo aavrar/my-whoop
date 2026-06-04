@@ -196,7 +196,7 @@ struct TrendsView: View {
     // MARK: - Charts stack
 
     private var chartsStack: some View {
-        VStack(spacing: WH.Spacing.md) {
+        VStack(spacing: WH.Spacing.lg) {
             // Daily-aggregate cards (recovery / HRV / RHR / strain / sleep)
             ForEach(MetricKind.dailyCases, id: \.id) { kind in
                 let pts = points(for: kind)
@@ -260,7 +260,8 @@ struct TrendsView: View {
                         yDomain: nil,
                         selected: $hrSelected
                     )
-                    .frame(height: 140)
+                    .frame(height: 168)
+                    .padding(.top, WH.Spacing.xs)
                 }
             }
             .padding(WH.Spacing.md)

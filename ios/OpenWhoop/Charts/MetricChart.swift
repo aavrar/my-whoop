@@ -14,6 +14,8 @@ struct MetricChart: View {
     var showSelection: Bool = false
     var yDomain: ClosedRange<Double>? = nil
     @Binding var selected: TrendPoint?
+    /// Called when the user taps (not scrubs) a point — e.g. to open a day-detail sheet.
+    var onCommit: ((TrendPoint) -> Void)? = nil
 
     // MARK: - Body
 
@@ -107,12 +109,13 @@ struct MetricChart: View {
                 .clipped()
         }
         .clipped()
-        // iOS-16 tap detection
+        // Tap to commit (open detail); hold-and-drag to scrub the inline callout.
         .chartOverlay { proxy in
             GeometryReader { geo in
                 Rectangle()
                     .fill(Color.clear)
                     .contentShape(Rectangle())
+                    .gesture(scrubGesture(proxy: proxy, geometry: geo))
                     .onTapGesture { location in
                         guard showSelection else { return }
                         handleTap(location: location, proxy: proxy, geometry: geo)
@@ -281,7 +284,7 @@ struct MetricChart: View {
             Text(kind.format(point.value))
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .foregroundStyle(WH.Color.textPrimary)
-            Text(mediumDateLabel(point.date))
+            Text(scrubDateLabel(point.date))
                 .font(.system(size: 10, weight: .regular))
                 .foregroundStyle(WH.Color.textSecondary)
         }
@@ -295,23 +298,45 @@ struct MetricChart: View {
         )
     }
 
-    // MARK: - Tap handling (iOS 16)
+    // MARK: - Selection & scrubbing
+
+    /// Hold (long-press) then drag to scrub. The long-press requirement lets the parent
+    /// ScrollView keep ordinary vertical swipes; only a deliberate hold starts scrubbing.
+    /// Releasing clears the callout.
+    private func scrubGesture(proxy: ChartProxy, geometry: GeometryProxy) -> some Gesture {
+        LongPressGesture(minimumDuration: 0.12)
+            .sequenced(before: DragGesture(minimumDistance: 0))
+            .onChanged { value in
+                guard showSelection else { return }
+                if case .second(true, let drag?) = value {
+                    selected = nearestPoint(at: drag.location, proxy: proxy, geometry: geometry)
+                }
+            }
+            .onEnded { _ in
+                selected = nil
+            }
+    }
 
     private func handleTap(location: CGPoint, proxy: ChartProxy, geometry: GeometryProxy) {
-        guard !series.isEmpty else { return }
+        guard let pt = nearestPoint(at: location, proxy: proxy, geometry: geometry) else { return }
+        selected = pt
+        onCommit?(pt)
+    }
+
+    /// Nearest series point to a touch x-position, mapping screen-x → date via the chart proxy.
+    private func nearestPoint(at location: CGPoint, proxy: ChartProxy, geometry: GeometryProxy) -> TrendPoint? {
+        guard !series.isEmpty else { return nil }
         let origin = geometry[proxy.plotAreaFrame].origin
         let x = location.x - origin.x
 
         if let tappedDate: Date = proxy.value(atX: x) {
-            selected = series.min(by: {
+            return series.min(by: {
                 abs($0.date.timeIntervalSince(tappedDate)) < abs($1.date.timeIntervalSince(tappedDate))
             })
-        } else {
-            // Fallback: fractional position
-            let fraction = max(0, min(1, location.x / geometry.size.width))
-            let idx = min(series.count - 1, Int((fraction * Double(series.count - 1)).rounded()))
-            selected = series[idx]
         }
+        let fraction = max(0, min(1, location.x / geometry.size.width))
+        let idx = min(series.count - 1, Int((fraction * Double(series.count - 1)).rounded()))
+        return series[idx]
     }
 
     // MARK: - Date formatting helpers
@@ -325,7 +350,19 @@ struct MetricChart: View {
     private static let monthFmt: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "MMM"; return f
     }()
+    private static let timeFmt: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "h:mm a"; return f
+    }()
+    private static let dateTimeFmt: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "MMM d, h:mm a"; return f
+    }()
 
-    private func shortDateLabel(_ date: Date) -> String { Self.shortFmt.string(from: date) }
-    private func mediumDateLabel(_ date: Date) -> String { Self.medFmt.string(from: date) }
+    /// Granularity follows the metric: intraday HR shows clock time; daily aggregates
+    /// (recovery, strain, etc.) show just the date — no spurious precision.
+    private func scrubDateLabel(_ date: Date) -> String {
+        if kind == .rawHR {
+            return seriesSpanDays > 1 ? Self.dateTimeFmt.string(from: date) : Self.timeFmt.string(from: date)
+        }
+        return Self.medFmt.string(from: date)
+    }
 }

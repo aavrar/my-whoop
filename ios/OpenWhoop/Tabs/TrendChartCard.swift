@@ -53,19 +53,18 @@ struct TrendChartCard: View {
             }
             .buttonStyle(.plain)
 
-            // Chart (compact: no axes, with day-tap selection)
+            // Chart: tap a point to open the day; hold-and-drag to scrub values.
             MetricChart(
                 series: points,
                 kind: kind,
                 showAxes: true,
                 showSelection: true,
                 yDomain: kind.fixedYDomain,
-                selected: $selected
+                selected: $selected,
+                onCommit: { onSelectDay($0.id) }
             )
-            .frame(height: 140)
-            .onChange(of: selected) { pt in
-                if let pt = pt { onSelectDay(pt.id) }
-            }
+            .frame(height: 168)
+            .padding(.top, WH.Spacing.xs)
         }
         .padding(WH.Spacing.md)
         .background(WH.Color.surface,

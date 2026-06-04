@@ -152,9 +152,16 @@ public actor OnDeviceEngine {
             let strain = strainScore(hr: strainHR, rhr: rhr, baselines: &baselines, nowTs: nowTs)
             await saveBaselines(baselines)
             let needMin = SleepNeed.need(strain: strain, recovery: nil)
+            let cals = Calories.estimate(
+                hr: strainHR, age: profile.age, sex: profile.sex,
+                weightKg: profile.weightKg, heightCm: profile.heightCm,
+                restingHr: Double(rhr), hrMax: 208.0 - 0.7 * Double(profile.age),
+                dayStartTs: dayStart, dayEndTs: dayEnd
+            )
             let metric = DailyMetric(day: dayStr, totalSleepMin: nil, efficiency: nil, deepMin: nil,
                                      remMin: nil, lightMin: nil, disturbances: nil, restingHr: nil,
                                      avgHrv: nil, recovery: nil, strain: strain, exerciseCount: nil,
+                                     calories: cals > 0 ? cals : nil,
                                      sleepNeedMin: needMin)
             try? await store.upsertDailyMetrics([metric], deviceId: deviceId)
             return

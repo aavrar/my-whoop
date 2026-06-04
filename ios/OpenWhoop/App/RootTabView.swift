@@ -5,7 +5,7 @@ struct RootTabView: View {
         TabView {
             TodayView()
                 .tabItem {
-                    Label("Today", systemImage: "house")
+                    Label("Home", systemImage: "house")
                 }
 
             SleepView()
