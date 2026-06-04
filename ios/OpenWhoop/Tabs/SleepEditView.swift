@@ -209,69 +209,37 @@ struct SleepEditView: View {
         mainStartTs: Int, mainEndTs: Int,
         extraStartTs: Int?, extraEndTs: Int?
     ) async -> String? {
-        // Work with raw JSON arrays via JSONSerialization to avoid cross-module Codable issues.
-        // A stage dict is { "start": Int, "end": Int, "stage": String }.
+        // Always RE-STAGE from raw sensor data over the edited window(s). Previously this reused the
+        // auto-detected stages and padded "light" for any extension — so when auto-detect was wrong
+        // (e.g. found <1h), extending to the real window produced an all-light night. Stage the real
+        // HR/gravity/RR instead.
+        var combined = await stageWindow(store: store, start: mainStartTs, end: mainEndTs)
 
-        // Parse original auto-detected stages for the main sleep period.
-        var combined: [[String: Any]] = []
-        if let json = session.stagesJSON,
-           let data = json.data(using: .utf8),
-           let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-            // Trim stages that exceed new mainEndTs (user may have shortened end).
-            combined = arr.compactMap { seg -> [String: Any]? in
-                guard let start = seg["start"] as? Int,
-                      let end   = seg["end"]   as? Int,
-                      let stage = seg["stage"] as? String,
-                      start < mainEndTs else { return nil }
-                return ["start": start, "end": min(end, mainEndTs), "stage": stage]
+        if let extraStart = extraStartTs, let extraEnd = extraEndTs {
+            if extraStart > mainEndTs {
+                combined.append(["start": mainEndTs, "end": extraStart, "stage": "wake"])
             }
-        }
-
-        // No extra segment: just extend end time with "light" if the user pushed it later.
-        guard let extraStart = extraStartTs, let extraEnd = extraEndTs else {
-            let origEnd = session.endTs
-            if mainEndTs > origEnd {
-                combined.append(["start": origEnd, "end": mainEndTs, "stage": "light"])
-            }
-            return jsonString(combined)
-        }
-
-        // Wake gap between main sleep end and extra segment start.
-        if extraStart > mainEndTs {
-            combined.append(["start": mainEndTs, "end": extraStart, "stage": "wake"])
-        }
-
-        // Stage the extra segment independently using real sensor data.
-        let extGrav = (try? await store.gravitySamples(deviceId: deviceId,
-                                                        from: mainEndTs, to: extraEnd,
-                                                        limit: 50_000)) ?? []
-        let extHR   = (try? await store.hrSamples(deviceId: deviceId,
-                                                   from: mainEndTs, to: extraEnd,
-                                                   limit: 50_000)) ?? []
-        let extRR   = (try? await store.rrIntervals(deviceId: deviceId,
-                                                     from: mainEndTs, to: extraEnd,
-                                                     limit: 50_000)) ?? []
-
-        let extGravInput = extGrav.map { SleepDetection.GravitySample(ts: $0.ts, x: $0.x, y: $0.y, z: $0.z) }
-        let extHRInput   = extHR.map   { (ts: $0.ts, bpm: $0.bpm) }
-        let extRRInput   = extRR.map   { (ts: $0.ts, rrMs: $0.rrMs) }
-
-        let extraStages = SleepStaging.stage(
-            sleepStart: extraStart, sleepEnd: extraEnd,
-            gravity: extGravInput, hr: extHRInput, rr: extRRInput
-        )
-
-        // If staging produced nothing useful fall back to "light" — brief morning
-        // return-to-sleep is almost always light/REM, never deep.
-        if extraStages.isEmpty || extraStages.allSatisfy({ $0.stage == "wake" }) {
-            combined.append(["start": extraStart, "end": extraEnd, "stage": "light"])
-        } else {
-            combined.append(contentsOf: extraStages.map {
-                ["start": $0.start, "end": $0.end, "stage": $0.stage] as [String: Any]
-            })
+            combined.append(contentsOf: await stageWindow(store: store, start: extraStart, end: extraEnd))
         }
 
         return jsonString(combined)
+    }
+
+    /// Stage one window from raw sensor data → array of {start,end,stage} dicts. Falls back to a
+    /// single "light" block only when there is genuinely nothing to stage.
+    private func stageWindow(store: WhoopStore, start: Int, end: Int) async -> [[String: Any]] {
+        guard end > start else { return [] }
+        let grav = (try? await store.gravitySamples(deviceId: deviceId, from: start, to: end, limit: 200_000)) ?? []
+        let hr   = (try? await store.hrSamples(deviceId: deviceId, from: start, to: end, limit: 200_000)) ?? []
+        let rr   = (try? await store.rrIntervals(deviceId: deviceId, from: start, to: end, limit: 200_000)) ?? []
+        let stages = SleepStaging.stage(
+            sleepStart: start, sleepEnd: end,
+            gravity: grav.map { SleepDetection.GravitySample(ts: $0.ts, x: $0.x, y: $0.y, z: $0.z) },
+            hr: hr.map { (ts: $0.ts, bpm: $0.bpm) },
+            rr: rr.map { (ts: $0.ts, rrMs: $0.rrMs) }
+        )
+        if stages.isEmpty { return [["start": start, "end": end, "stage": "light"]] }
+        return stages.map { ["start": $0.start, "end": $0.end, "stage": $0.stage] as [String: Any] }
     }
 
     private func jsonString(_ arr: [[String: Any]]) -> String? {
